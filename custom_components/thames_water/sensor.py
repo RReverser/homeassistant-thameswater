@@ -154,6 +154,15 @@ class ThamesWaterSensor(SensorEntity):
         await self.async_update()
         self.async_write_ha_state()
 
+    def _fetch_meter_usage(self, start_dt: datetime, end_dt: datetime) -> MeterUsage:
+        """Fetch meter usage from Thames Water API (blocking, run in executor)."""
+        thames_water = ThamesWater(
+            email=self._username,
+            password=self._password,
+            account_number=self._account_number,
+        )
+        return thames_water.get_meter_usage(self._meter_id, start_dt, end_dt)
+
     async def async_update(self):
         """Fetch data, build hourly statistics, and inject external statistics."""
         stat_id = f"{DOMAIN}:thameswater_consumption"
@@ -162,8 +171,9 @@ class ThamesWaterSensor(SensorEntity):
         start_dt = end_dt - timedelta(days=3)
         # readings holds all hourly data for the entire period.
 
-        thames_water = ThamesWater(email=self._username, password=self._password, account_number=self._account_number)
-        meter_usage = thames_water.get_meter_usage(self._meter_id, start_dt, end_dt)
+        meter_usage = await self._hass.async_add_executor_job(
+            self._fetch_meter_usage, start_dt, end_dt
+        )
         _LOGGER.info("Fetched %d historical entries", len(meter_usage.Lines))
 
         if len(meter_usage.Lines) == 0:
