@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import logging
 
-from thameswaterclient import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
+from .thameswaterclient import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
 
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import async_add_external_statistics
