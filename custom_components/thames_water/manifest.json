@@ -2,7 +2,7 @@
   "domain": "thames_water",
   "name": "Thames Water",
   "integration_type": "hub",
-  "version": "1.0",
+  "version": "1.0.1",
   "config_flow": true,
   "requirements": [
     "thameswaterclient @ git+https://github.com/jelmer/thameswaterclient"
