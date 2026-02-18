@@ -171,12 +171,17 @@ class ThamesWaterSensor(SensorEntity):
         start_dt = end_dt - timedelta(days=3)
         # readings holds all hourly data for the entire period.
 
-        meter_usage = await self._hass.async_add_executor_job(
-            self._fetch_meter_usage, start_dt, end_dt
-        )
+        try:
+            meter_usage = await self._hass.async_add_executor_job(
+                self._fetch_meter_usage, start_dt, end_dt
+            )
+        except Exception:
+            _LOGGER.exception("Failed to fetch meter usage from Thames Water")
+            return
         _LOGGER.info("Fetched %d historical entries", len(meter_usage.Lines))
 
         if len(meter_usage.Lines) == 0:
+            _LOGGER.warning("Thames Water returned no data lines for %s to %s", start_dt, end_dt)
             return
 
         # Generate new StatisticData entries using the previous cumulative sum.
