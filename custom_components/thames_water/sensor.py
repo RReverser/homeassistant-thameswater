@@ -74,8 +74,9 @@ def get_unique_id(meter_id: str) -> str:
     return f"water_usage_{meter_id}"
 
 
-
-def _generate_statistics_from_meter_usage(start: date, meter_usage: MeterUsage) -> list[StatisticData]:
+def _generate_statistics_from_meter_usage(
+    start: date, meter_usage: MeterUsage
+) -> list[StatisticData]:
     """Convert a list of (datetime, reading) entries into StatisticData entries."""
     return [
         StatisticData(
@@ -83,8 +84,7 @@ def _generate_statistics_from_meter_usage(start: date, meter_usage: MeterUsage) 
             state=measurement.usage,
             sum=measurement.total,
         )
-        for measurement
-        in meter_usage_lines_to_timeseries(start, meter_usage.Lines)
+        for measurement in meter_usage_lines_to_timeseries(start, meter_usage.Lines)
     ]
 
 
@@ -167,7 +167,9 @@ class ThamesWaterSensor(SensorEntity):
         """Fetch data, build hourly statistics, and inject external statistics."""
         stat_id = f"{DOMAIN}:thameswater_consumption"
 
-        end_dt = datetime.now() - timedelta(days=3)
+        end_dt = (datetime.now() - timedelta(days=3)).replace(
+            minute=0, second=0, microsecond=0
+        )
         start_dt = end_dt - timedelta(days=3)
         # readings holds all hourly data for the entire period.
 
@@ -181,7 +183,9 @@ class ThamesWaterSensor(SensorEntity):
         _LOGGER.info("Fetched %d historical entries", len(meter_usage.Lines))
 
         if len(meter_usage.Lines) == 0:
-            _LOGGER.warning("Thames Water returned no data lines for %s to %s", start_dt, end_dt)
+            _LOGGER.warning(
+                "Thames Water returned no data lines for %s to %s", start_dt, end_dt
+            )
             return
 
         # Generate new StatisticData entries using the previous cumulative sum.

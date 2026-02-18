@@ -2,7 +2,6 @@ import os
 import uuid
 import base64
 import hashlib
-import zoneinfo
 import datetime
 from typing import Optional, Literal
 from dataclasses import dataclass, field
@@ -25,6 +24,12 @@ class Line:
 
 
 @dataclass
+class DateRangeKey:
+    Key: str
+    Value: str
+
+
+@dataclass
 class MeterUsage:
     IsError: bool
     IsDataAvailable: bool
@@ -32,21 +37,33 @@ class MeterUsage:
     TargetUsage: float
     AverageUsage: float
     ActualUsage: float
-    MyUsage: Optional[str]  # so far have only seen 'NA' or None
+    MyUsage: Optional[str]  # so far have only seen 'NA', 'High', or None
     AverageUsagePerPerson: float
     IsMO365Customer: bool
     IsMOPartialCustomer: bool
     IsMOCompleteCustomer: bool
     IsExtraMonthConsumptionMessage: bool
     Lines: list[Line] = field(default_factory=list)
-    AlertsValues: Optional[dict] = field(
-        default_factory=dict
-    )  # assumption that it could be a dict
+    AlertsValues: Optional[dict] = field(default_factory=dict)
+
+
+@dataclass
+class MetersResponse(MeterUsage):
+    """Response from getMeters, which includes date range options and meter list
+    in addition to the standard MeterUsage fields."""
+
+    Meters: list[str] = field(default_factory=list)
+    Yearly: list[DateRangeKey] = field(default_factory=list)
+    HalfYearly: list[DateRangeKey] = field(default_factory=list)
+    Monthly: list[DateRangeKey] = field(default_factory=list)
+    Daily: list[DateRangeKey] = field(default_factory=list)
+    IsRecentCustomer: bool = False
+    IsPremiseAddressSameAsMailingAddress: bool = True
 
 
 @dataclass
 class Measurement:
-    hour_start: datetime
+    start: datetime.date
     usage: int  # Usage
     total: int  # Read
 
@@ -261,6 +278,45 @@ class ThamesWater:
         self._login(state, new_id_token)
         self.s.cookies.set(name="b2cAuthenticated", value="true")
 
+        # Visit the meters usage page to establish server-side session context,
+        # which is required for the AJAX endpoints to return data rather than a 500 page.
+        r = self.s.get(
+            f"https://myaccount.thameswater.co.uk/mydashboard/my-meters-usage?contractAccountNumber={self.account_number}",
+            headers={
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+            },
+        )
+        r.raise_for_status()
+
+    def get_meter_numbers(self) -> list[str]:
+        """Return the list of meter serial numbers on the account."""
+        return self.get_meters().Meters
+
+    def get_meters(self) -> MetersResponse:
+        """Return meter list and current usage data.
+
+        This is the primary endpoint for daily consumption data.
+        The Referer header with contractAccountNumber is required by the server.
+        """
+        url = "https://myaccount.thameswater.co.uk/ajax/waterMeter/getMeters"
+
+        headers = {
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+            "Referer": f"https://myaccount.thameswater.co.uk/mydashboard/my-meters-usage?contractAccountNumber={self.account_number}",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+        r = self.s.get(url, headers=headers)
+        r.raise_for_status()
+
+        data = r.json()
+        data["Lines"] = [Line(**line) for line in data["Lines"] or []]
+        data["Yearly"] = [DateRangeKey(**k) for k in data.get("Yearly") or []]
+        data["HalfYearly"] = [DateRangeKey(**k) for k in data.get("HalfYearly") or []]
+        data["Monthly"] = [DateRangeKey(**k) for k in data.get("Monthly") or []]
+        data["Daily"] = [DateRangeKey(**k) for k in data.get("Daily") or []]
+        return MetersResponse(**data)
+
     def get_meter_usage(
         self,
         meter: int,
@@ -278,7 +334,7 @@ class ThamesWater:
             "endDate": end.day,
             "endMonth": end.month,
             "endYear": end.year,
-            "granularity": "H",
+            "granularity": granularity,
             "premiseId": "",
             "isForC4C": "false",
         }
@@ -297,15 +353,24 @@ class ThamesWater:
         return MeterUsage(**data)
 
 
-def date_range(
+@dataclass
+class HourlyMeasurement:
+    hour_start: datetime.datetime
+    usage: int  # Usage
+    total: int  # Read
+
+
+def _date_range(
     start: datetime.datetime,
     end: datetime.datetime,
     freq: datetime.timedelta = datetime.timedelta(hours=1),
     tz: str = "Europe/London",
-):
-    if isinstance(start, datetime.date):
+) -> list[datetime.datetime]:
+    import zoneinfo
+
+    if isinstance(start, datetime.date) and not isinstance(start, datetime.datetime):
         start = datetime.datetime(start.year, start.month, start.day)
-    if isinstance(end, datetime.date):
+    if isinstance(end, datetime.date) and not isinstance(end, datetime.datetime):
         end = datetime.datetime(end.year, end.month, end.day)
     if start.tzinfo is not None or end.tzinfo is not None:
         raise ValueError(
@@ -328,19 +393,51 @@ def date_range(
 def meter_usage_lines_to_timeseries(
     start: datetime.date,
     lines: list[Line],
-) -> list[Measurement]:
-    """Convert meter usage lines to a time series of Measurement objects
+) -> list[HourlyMeasurement]:
+    """Convert hourly meter usage lines to a time series of HourlyMeasurement objects.
 
     Assumptions:
     * Lines is hourly
     * Lines is contiguous (no gaps)
     """
-    timestamps = date_range(start, start + datetime.timedelta(hours=len(lines)))
+    timestamps = _date_range(start, start + datetime.timedelta(hours=len(lines)))
     return [
-        Measurement(
+        HourlyMeasurement(
             hour_start=timestamps[i],
             usage=int(line.Usage),
             total=int(line.Read),
         )
         for i, line in enumerate(lines)
+    ]
+
+
+def _parse_line_label_as_date(label: str, today: datetime.date) -> datetime.date:
+    """Parse a line label like '16-January' or '1-February' into a date.
+
+    The year is inferred from today's date, with rollover handling so that
+    e.g. a December label in a response fetched in January uses the prior year.
+    """
+    # Append the current year to avoid the Python 3.15 deprecation for yearless strptime.
+    dt = datetime.datetime.strptime(f"{label}-{today.year}", "%d-%B-%Y")
+    # If the label month is later than June and we're in the first half of the year,
+    # the data belongs to the previous year.
+    if dt.month > 6 and today.month <= 6:
+        dt = dt.replace(year=today.year - 1)
+    return dt.date()
+
+
+def lines_to_timeseries(lines: list[Line]) -> list[Measurement]:
+    """Convert meter usage lines to a time series of Measurement objects.
+
+    The date of each measurement is parsed from the line's Label field
+    (e.g. '16-January', '1-February').
+    """
+    today = datetime.date.today()
+    return [
+        Measurement(
+            start=_parse_line_label_as_date(line.Label, today),
+            usage=int(line.Usage),
+            total=int(line.Read),
+        )
+        for line in lines
     ]
