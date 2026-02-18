@@ -5,7 +5,7 @@
   "version": "1.0",
   "config_flow": true,
   "requirements": [
-    "thameswaterclient"
+    "thameswaterclient @ git+https://github.com/jelmer/thameswaterclient"
   ],
   "dependencies": [
     "recorder"
