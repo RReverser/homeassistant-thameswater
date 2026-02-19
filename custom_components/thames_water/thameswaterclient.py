@@ -68,6 +68,13 @@ class Measurement:
     total: int  # Read
 
 
+@dataclass
+class HourlyMeasurement:
+    hour_start: datetime.datetime
+    usage: int  # Usage
+    total: int  # Read
+
+
 class ThamesWater:
     def __init__(
         self,
@@ -353,16 +360,41 @@ class ThamesWater:
         return MeterUsage(**data)
 
 
-@dataclass
-class HourlyMeasurement:
-    hour_start: datetime.datetime
-    usage: int  # Usage
-    total: int  # Read
+def _parse_line_label_as_date(label: str, today: datetime.date) -> datetime.date:
+    """Parse a line label like '16-January' or '1-February' into a date.
+
+    The year is inferred from today's date, with rollover handling so that
+    e.g. a December label in a response fetched in January uses the prior year.
+    """
+    # Append the current year to avoid the Python 3.15 deprecation for yearless strptime.
+    dt = datetime.datetime.strptime(f"{label}-{today.year}", "%d-%B-%Y")
+    # If the label month is later than June and we're in the first half of the year,
+    # the data belongs to the previous year.
+    if dt.month > 6 and today.month <= 6:
+        dt = dt.replace(year=today.year - 1)
+    return dt.date()
+
+
+def lines_to_timeseries(lines: list[Line]) -> list[Measurement]:
+    """Convert meter usage lines to a time series of Measurement objects.
+
+    The date of each measurement is parsed from the line's Label field
+    (e.g. '16-January', '1-February').
+    """
+    today = datetime.date.today()
+    return [
+        Measurement(
+            start=_parse_line_label_as_date(line.Label, today),
+            usage=int(line.Usage),
+            total=int(line.Read),
+        )
+        for line in lines
+    ]
 
 
 def _date_range(
-    start: datetime.datetime,
-    end: datetime.datetime,
+    start: datetime.date,
+    end: datetime.date,
     freq: datetime.timedelta = datetime.timedelta(hours=1),
     tz: str = "Europe/London",
 ) -> list[datetime.datetime]:
@@ -408,36 +440,4 @@ def meter_usage_lines_to_timeseries(
             total=int(line.Read),
         )
         for i, line in enumerate(lines)
-    ]
-
-
-def _parse_line_label_as_date(label: str, today: datetime.date) -> datetime.date:
-    """Parse a line label like '16-January' or '1-February' into a date.
-
-    The year is inferred from today's date, with rollover handling so that
-    e.g. a December label in a response fetched in January uses the prior year.
-    """
-    # Append the current year to avoid the Python 3.15 deprecation for yearless strptime.
-    dt = datetime.datetime.strptime(f"{label}-{today.year}", "%d-%B-%Y")
-    # If the label month is later than June and we're in the first half of the year,
-    # the data belongs to the previous year.
-    if dt.month > 6 and today.month <= 6:
-        dt = dt.replace(year=today.year - 1)
-    return dt.date()
-
-
-def lines_to_timeseries(lines: list[Line]) -> list[Measurement]:
-    """Convert meter usage lines to a time series of Measurement objects.
-
-    The date of each measurement is parsed from the line's Label field
-    (e.g. '16-January', '1-February').
-    """
-    today = datetime.date.today()
-    return [
-        Measurement(
-            start=_parse_line_label_as_date(line.Label, today),
-            usage=int(line.Usage),
-            total=int(line.Read),
-        )
-        for line in lines
     ]
