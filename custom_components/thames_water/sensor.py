@@ -12,7 +12,6 @@ from homeassistant.components.recorder.statistics import async_add_external_stat
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfVolume
@@ -91,7 +90,6 @@ def _generate_statistics_from_meter_usage(
 class ThamesWaterSensor(SensorEntity):
     """Thames Water Sensor class."""
 
-    _attr_state_class = SensorStateClass.TOTAL
     _attr_device_class = SensorDeviceClass.WATER
     _attr_native_unit_of_measurement = UnitOfVolume.LITERS
 
