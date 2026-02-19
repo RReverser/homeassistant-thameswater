@@ -17,13 +17,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 SELENIUM_TIMEOUT = 60
-UPDATE_HOURS = [12, 0]
+UPDATE_INTERVAL = timedelta(minutes=30)
 
 
 async def async_setup_entry(
@@ -57,14 +57,7 @@ async def async_setup_entry(
     )
     async_add_entities([sensor], update_before_add=True)
 
-    # Schedule the sensor to update every day at 12:00 PM.
-    async_track_time_change(
-        hass,
-        sensor.async_update_callback,
-        hour=UPDATE_HOURS,
-        minute=0,
-        second=0,
-    )
+    async_track_time_interval(hass, sensor.async_update_callback, UPDATE_INTERVAL)
     return True
 
 
