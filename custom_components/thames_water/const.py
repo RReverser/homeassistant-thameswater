@@ -1,1 +1,2 @@
 DOMAIN = "thames_water"
+DEFAULT_UPDATE_INTERVAL_HOURS = 6

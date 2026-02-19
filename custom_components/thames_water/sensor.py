@@ -19,11 +19,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
 
-from .const import DOMAIN
+from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 SELENIUM_TIMEOUT = 60
-UPDATE_INTERVAL = timedelta(minutes=30)
 
 
 async def async_setup_entry(
@@ -57,7 +56,12 @@ async def async_setup_entry(
     )
     async_add_entities([sensor], update_before_add=True)
 
-    async_track_time_interval(hass, sensor.async_update_callback, UPDATE_INTERVAL)
+    update_interval_hours = entry.data.get(
+        "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
+    )
+    async_track_time_interval(
+        hass, sensor.async_update_callback, timedelta(hours=update_interval_hours)
+    )
     return True
 
 
