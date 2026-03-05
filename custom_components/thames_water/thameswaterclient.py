@@ -4,7 +4,8 @@ import base64
 import hashlib
 import datetime
 from typing import Optional, Literal
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass, field, fields
 from urllib.parse import urlparse, parse_qs, unquote
 
 import requests
@@ -73,6 +74,40 @@ class HourlyMeasurement:
     hour_start: datetime.datetime
     usage: int  # Usage
     total: int  # Read
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _filter_known_fields(cls: type, data: dict) -> dict:
+    """Filter a dict to only known dataclass fields, warning about unknown ones."""
+    known = {f.name for f in fields(cls)}
+    unknown = data.keys() - known
+    if unknown:
+        _logger.warning(
+            "Unknown fields in %s response: %s",
+            cls.__name__,
+            ", ".join(sorted(unknown)),
+        )
+    return {k: v for k, v in data.items() if k in known}
+
+
+def parse_meter_usage(data: dict) -> MeterUsage:
+    """Parse a raw JSON dict from the meter usage API into a MeterUsage object."""
+    data = dict(data)
+    data["Lines"] = [Line(**line) for line in data["Lines"] or []]
+    return MeterUsage(**_filter_known_fields(MeterUsage, data))
+
+
+def parse_meters_response(data: dict) -> MetersResponse:
+    """Parse a raw JSON dict from the getMeters API into a MetersResponse object."""
+    data = dict(data)
+    data["Lines"] = [Line(**line) for line in data["Lines"] or []]
+    data["Yearly"] = [DateRangeKey(**k) for k in data.get("Yearly") or []]
+    data["HalfYearly"] = [DateRangeKey(**k) for k in data.get("HalfYearly") or []]
+    data["Monthly"] = [DateRangeKey(**k) for k in data.get("Monthly") or []]
+    data["Daily"] = [DateRangeKey(**k) for k in data.get("Daily") or []]
+    return MetersResponse(**_filter_known_fields(MetersResponse, data))
 
 
 class ThamesWater:
@@ -316,17 +351,11 @@ class ThamesWater:
         r = self.s.get(url, headers=headers)
         r.raise_for_status()
 
-        data = r.json()
-        data["Lines"] = [Line(**line) for line in data["Lines"] or []]
-        data["Yearly"] = [DateRangeKey(**k) for k in data.get("Yearly") or []]
-        data["HalfYearly"] = [DateRangeKey(**k) for k in data.get("HalfYearly") or []]
-        data["Monthly"] = [DateRangeKey(**k) for k in data.get("Monthly") or []]
-        data["Daily"] = [DateRangeKey(**k) for k in data.get("Daily") or []]
-        return MetersResponse(**data)
+        return parse_meters_response(r.json())
 
     def get_meter_usage(
         self,
-        meter: int,
+        meter: int | str,
         start: datetime.datetime,
         end: datetime.datetime,
         granularity: Literal["H", "D", "M"] = "H",
@@ -355,9 +384,7 @@ class ThamesWater:
         r = self.s.get(url, params=params, headers=headers)
         r.raise_for_status()
 
-        data = r.json()
-        data["Lines"] = [Line(**line) for line in data["Lines"] or []]
-        return MeterUsage(**data)
+        return parse_meter_usage(r.json())
 
 
 def _parse_line_label_as_date(label: str, today: datetime.date) -> datetime.date:
@@ -432,6 +459,8 @@ def meter_usage_lines_to_timeseries(
     * Lines is hourly
     * Lines is contiguous (no gaps)
     """
+    if isinstance(start, datetime.date) and not isinstance(start, datetime.datetime):
+        start = datetime.datetime(start.year, start.month, start.day)
     timestamps = _date_range(start, start + datetime.timedelta(hours=len(lines)))
     return [
         HourlyMeasurement(
