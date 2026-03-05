@@ -10,9 +10,8 @@
   ],
   "iot_class": "cloud_polling",
   "codeowners": [
-    "@AyrtonB",
-    "@ale770"
+    "@jelmer"
   ],
-  "documentation": "hhttps://github.com/ale770/ha-thames-water",
-  "issue_tracker": "hhttps://github.com/ale770/ha-thames-water/issues"
+  "documentation": "https://github.com/jelmer/HA-Thames-Water",
+  "issue_tracker": "https://github.com/jelmer/HA-Thames-Water/issues"
 }

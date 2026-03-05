@@ -1,5 +1,5 @@
 {
-  "name": "Thames Water Usage",
+  "name": "Thames Water",
   "domains": ["sensor"],
   "iot_class": "cloud_polling",
   "homeassistant": "2024.10.3"
