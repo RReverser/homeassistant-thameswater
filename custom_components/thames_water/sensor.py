@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import logging
 
-from .thameswaterclient import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
+from thameswaterapi import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
 
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import async_add_external_statistics
@@ -154,7 +154,7 @@ class ThamesWaterSensor(SensorEntity):
         thames_water = ThamesWater(
             email=self._username,
             password=self._password,
-            account_number=self._account_number,
+            account_number=int(self._account_number),
         )
         return thames_water.get_meter_usage(self._meter_id, start_dt, end_dt)
 

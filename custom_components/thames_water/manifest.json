@@ -4,7 +4,7 @@
   "integration_type": "hub",
   "version": "1.0.1",
   "config_flow": true,
-  "requirements": [],
+  "requirements": ["thameswaterapi>=0.2.0"],
   "dependencies": [
     "recorder"
   ],

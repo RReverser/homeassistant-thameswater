@@ -5,7 +5,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 
 from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
-from .thameswaterclient import AuthenticationError, ThamesWater
+from thameswaterapi import AuthenticationError, ThamesWater
 
 
 class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -89,6 +89,6 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         client = ThamesWater(
             email=username,
             password=password,
-            account_number=account_number,
+            account_number=int(account_number),
         )
         return client.get_meter_numbers()
