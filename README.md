@@ -10,9 +10,7 @@ You need a Thames Water Smart Meter. The water consumption data provided by this
 
 The integration uses Selenium to log in to the Thames Water website, as it needs to obtain the browser cookies to make the API call. I use the Selenium Addon in Home Assistant.
 
-With these cookies, it then calls the `getSmartWaterMeterConsumptions` API to retrieve the usage data.
-
-The integration was created recently, so it may contain bugs. Proceed with caution!
+It uses the [thameswaterapi](https://github.com/jelmer/thameswaterapi) Python package to interact with the Thames Water API.
 
 ## Installation
 
