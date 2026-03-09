@@ -54,4 +54,6 @@ It will attempt to fetch the latest data at 00:00 and 12:00 every day.
 
 ![Dashboard](./dashboard.png)
 
+## Acknowledgements
 
+This integration is based on the original work by [Ayrton Bourn (AyrtonB)](https://github.com/AyrtonB).
