@@ -12,6 +12,7 @@ from homeassistant.components.recorder.statistics import async_add_external_stat
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfVolume
@@ -89,6 +90,7 @@ class ThamesWaterSensor(SensorEntity):
 
     _attr_device_class = SensorDeviceClass.WATER
     _attr_native_unit_of_measurement = UnitOfVolume.LITERS
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     def __init__(
         self,
