@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import logging
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from thameswaterapi import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
 
@@ -90,10 +91,11 @@ def _generate_daily_statistics_from_meter_usage(
     start: date, meter_usage: MeterUsage
 ) -> list[StatisticData]:
     """Convert daily meter usage lines into StatisticData entries."""
+    tz = ZoneInfo("Europe/London")
     if isinstance(start, datetime):
-        day = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        day = start.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
     else:
-        day = datetime(start.year, start.month, start.day)
+        day = datetime(start.year, start.month, start.day, tzinfo=tz)
     return [
         StatisticData(
             start=day + timedelta(days=i),
