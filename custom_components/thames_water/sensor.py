@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 import logging
+from typing import Literal
 
 from thameswaterapi import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
 
@@ -71,10 +72,10 @@ def get_unique_id(meter_id: str) -> str:
     return f"water_usage_{meter_id}"
 
 
-def _generate_statistics_from_meter_usage(
+def _generate_hourly_statistics_from_meter_usage(
     start: date, meter_usage: MeterUsage
 ) -> list[StatisticData]:
-    """Convert a list of (datetime, reading) entries into StatisticData entries."""
+    """Convert hourly meter usage lines into StatisticData entries."""
     return [
         StatisticData(
             start=measurement.hour_start,
@@ -82,6 +83,24 @@ def _generate_statistics_from_meter_usage(
             sum=measurement.total,
         )
         for measurement in meter_usage_lines_to_timeseries(start, meter_usage.Lines)
+    ]
+
+
+def _generate_daily_statistics_from_meter_usage(
+    start: date, meter_usage: MeterUsage
+) -> list[StatisticData]:
+    """Convert daily meter usage lines into StatisticData entries."""
+    if isinstance(start, datetime):
+        day = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        day = datetime(start.year, start.month, start.day)
+    return [
+        StatisticData(
+            start=day + timedelta(days=i),
+            state=int(line.Usage),
+            sum=int(line.Read),
+        )
+        for i, line in enumerate(meter_usage.Lines)
     ]
 
 
@@ -151,51 +170,108 @@ class ThamesWaterSensor(SensorEntity):
         await self.async_update()
         self.async_write_ha_state()
 
-    def _fetch_meter_usage(self, start_dt: datetime, end_dt: datetime) -> MeterUsage:
+    def _fetch_meter_usage(
+        self,
+        start_dt: datetime,
+        end_dt: datetime,
+        granularity: Literal["H", "D", "M"] = "H",
+    ) -> MeterUsage:
         """Fetch meter usage from Thames Water API (blocking, run in executor)."""
         thames_water = ThamesWater(
             email=self._username,
             password=self._password,
             account_number=int(self._account_number),
         )
-        return thames_water.get_meter_usage(self._meter_id, start_dt, end_dt)
-
-    async def async_update(self):
-        """Fetch data, build hourly statistics, and inject external statistics."""
-        stat_id = f"{DOMAIN}:thameswater_consumption"
-
-        end_dt = (datetime.now() - timedelta(days=3)).replace(
-            minute=0, second=0, microsecond=0
+        return thames_water.get_meter_usage(
+            self._meter_id, start_dt, end_dt, granularity=granularity
         )
-        start_dt = end_dt - timedelta(days=3)
-        # readings holds all hourly data for the entire period.
 
-        try:
-            meter_usage = await self._hass.async_add_executor_job(
-                self._fetch_meter_usage, start_dt, end_dt
-            )
-        except Exception:
-            _LOGGER.exception("Failed to fetch meter usage from Thames Water")
-            return
-        _LOGGER.info("Fetched %d historical entries", len(meter_usage.Lines))
-
-        if len(meter_usage.Lines) == 0:
-            _LOGGER.warning(
-                "Thames Water returned no data lines for %s to %s", start_dt, end_dt
-            )
-            return
-
-        # Generate new StatisticData entries using the previous cumulative sum.
-        stats = _generate_statistics_from_meter_usage(start_dt, meter_usage)
-        self._state = meter_usage.Lines[-1].Read  # most recent total usage on meter
-
-        # Build per-hour statistics from each reading.
+    def _inject_statistics(
+        self,
+        stat_id: str,
+        name: str,
+        stats: list[StatisticData],
+    ) -> None:
+        """Inject external statistics into the recorder."""
         metadata = StatisticMetaData(
             has_mean=False,
             has_sum=True,
-            name="Thames Water Consumption",
+            name=name,
             source=DOMAIN,
             statistic_id=stat_id,
             unit_of_measurement=UnitOfVolume.LITERS,
         )
         async_add_external_statistics(self._hass, metadata, stats)
+
+    async def async_update(self):
+        """Fetch data, build statistics, and inject external statistics."""
+        end_dt = (datetime.now() - timedelta(days=3)).replace(
+            minute=0, second=0, microsecond=0
+        )
+        start_dt = end_dt - timedelta(days=3)
+
+        try:
+            hourly_usage = await self._hass.async_add_executor_job(
+                self._fetch_meter_usage, start_dt, end_dt, "H"
+            )
+        except Exception:
+            _LOGGER.exception("Failed to fetch hourly meter usage from Thames Water")
+            hourly_usage = None
+
+        try:
+            daily_usage = await self._hass.async_add_executor_job(
+                self._fetch_meter_usage, start_dt, end_dt, "D"
+            )
+        except Exception:
+            _LOGGER.exception("Failed to fetch daily meter usage from Thames Water")
+            daily_usage = None
+
+        # Hourly statistics
+        if hourly_usage is not None and len(hourly_usage.Lines) > 0:
+            _LOGGER.info("Fetched %d hourly entries", len(hourly_usage.Lines))
+            hourly_stats = _generate_hourly_statistics_from_meter_usage(
+                start_dt, hourly_usage
+            )
+            self._state = hourly_usage.Lines[-1].Read
+            self._inject_statistics(
+                f"{DOMAIN}:thameswater_consumption_hourly",
+                "Thames Water Consumption (Hourly)",
+                hourly_stats,
+            )
+        else:
+            hourly_stats = None
+            _LOGGER.warning(
+                "Thames Water returned no hourly data for %s to %s",
+                start_dt,
+                end_dt,
+            )
+
+        # Daily statistics
+        if daily_usage is not None and len(daily_usage.Lines) > 0:
+            _LOGGER.info("Fetched %d daily entries", len(daily_usage.Lines))
+            daily_stats = _generate_daily_statistics_from_meter_usage(
+                start_dt, daily_usage
+            )
+            if self._state is None:
+                self._state = daily_usage.Lines[-1].Read
+            self._inject_statistics(
+                f"{DOMAIN}:thameswater_consumption_daily",
+                "Thames Water Consumption (Daily)",
+                daily_stats,
+            )
+        else:
+            daily_stats = None
+            _LOGGER.warning(
+                "Thames Water returned no daily data for %s to %s",
+                start_dt,
+                end_dt,
+            )
+
+        # Combined: prefer hourly, fall back to daily
+        combined_stats = hourly_stats or daily_stats
+        if combined_stats is not None:
+            self._inject_statistics(
+                f"{DOMAIN}:thameswater_consumption",
+                "Thames Water Consumption",
+                combined_stats,
+            )
