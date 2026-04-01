@@ -199,6 +199,13 @@ class ThamesWaterSensor(SensorEntity):
         stats: list[StatisticData],
     ) -> None:
         """Inject external statistics into the recorder."""
+        _LOGGER.debug(
+            "Injecting %d statistics for %s (first: %s, last: %s)",
+            len(stats),
+            stat_id,
+            stats[0]["start"] if stats else None,
+            stats[-1]["start"] if stats else None,
+        )
         metadata = StatisticMetaData(
             has_mean=False,
             has_sum=True,
@@ -237,7 +244,7 @@ class ThamesWaterSensor(SensorEntity):
         if hourly_usage is not None and len(hourly_usage.Lines) > 0:
             _LOGGER.info("Fetched %d hourly entries", len(hourly_usage.Lines))
             hourly_stats = _generate_hourly_statistics_from_meter_usage(
-                start_dt, hourly_usage
+                start_dt.date(), hourly_usage
             )
             self._state = hourly_usage.Lines[-1].Read
             self._inject_statistics(
