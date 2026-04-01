@@ -9,7 +9,11 @@ from zoneinfo import ZoneInfo
 
 from thameswaterapi import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
 
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMeanType,
+    StatisticMetaData,
+)
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -198,6 +202,7 @@ class ThamesWaterSensor(SensorEntity):
         metadata = StatisticMetaData(
             has_mean=False,
             has_sum=True,
+            mean_type=StatisticMeanType.NONE,
             name=name,
             source=DOMAIN,
             statistic_id=stat_id,
