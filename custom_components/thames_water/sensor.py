@@ -25,6 +25,7 @@ from homeassistant.const import CONF_NAME, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
 
@@ -213,6 +214,7 @@ class ThamesWaterSensor(SensorEntity):
             name=name,
             source=DOMAIN,
             statistic_id=stat_id,
+            unit_class=VolumeConverter.UNIT_CLASS,
             unit_of_measurement=UnitOfVolume.LITERS,
         )
         async_add_external_statistics(self._hass, metadata, stats)
