@@ -7,7 +7,12 @@ import logging
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from thameswaterapi import MeterUsage, ThamesWater, meter_usage_lines_to_timeseries
+from thameswaterapi import (
+    Account,
+    MeterUsage,
+    ThamesWater,
+    meter_usage_lines_to_timeseries,
+)
 
 from homeassistant.components.recorder.models import (
     StatisticData,
@@ -62,13 +67,24 @@ async def async_setup_entry(
         meter_id,
         unique_id,
     )
-    async_add_entities([sensor], update_before_add=True)
+    balance_sensor = ThamesWaterBalanceSensor(
+        hass,
+        username,
+        password,
+        account_number,
+    )
+    async_add_entities([sensor, balance_sensor], update_before_add=True)
 
     update_interval_hours = entry.data.get(
         "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
     )
     async_track_time_interval(
         hass, sensor.async_update_callback, timedelta(hours=update_interval_hours)
+    )
+    async_track_time_interval(
+        hass,
+        balance_sensor.async_update_callback,
+        timedelta(hours=update_interval_hours),
     )
     return True
 
@@ -291,3 +307,78 @@ class ThamesWaterSensor(SensorEntity):
                 "Thames Water Consumption",
                 combined_stats,
             )
+
+
+class ThamesWaterBalanceSensor(SensorEntity):
+    """Sensor exposing the outstanding balance on the Thames Water account."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "GBP"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_should_poll = False
+    _attr_name = "Thames Water Outstanding Balance"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        username: str,
+        password: str,
+        account_number: str,
+    ) -> None:
+        """Initialize the balance sensor."""
+        self._hass = hass
+        self._username = username
+        self._password = password
+        self._account_number = account_number
+        self._attr_unique_id = f"thames_water_balance_{account_number}"
+        self._attr_native_value: float | None = None
+        self._current_balance: float | None = None
+        self._is_in_credit: bool | None = None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information for the balance sensor."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, "thames_water")},
+            manufacturer="Thames Water",
+            model="Thames Water",
+            name="Thames Water Meter",
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, float | bool | None]:
+        """Expose the broader balance picture as attributes."""
+        return {
+            "current_balance": self._current_balance,
+            "is_in_credit": self._is_in_credit,
+        }
+
+    @callback
+    async def async_update_callback(self, ts) -> None:
+        """Triggered by the time interval to refresh and write state."""
+        await self.async_update()
+        self.async_write_ha_state()
+
+    def _fetch_account(self) -> Account:
+        """Fetch account details (blocking; run in executor)."""
+        thames_water = ThamesWater(
+            email=self._username,
+            password=self._password,
+            account_number=int(self._account_number),
+        )
+        return thames_water.get_account()
+
+    async def async_update(self) -> None:
+        """Fetch account details and update the sensor state."""
+        try:
+            account = await self._hass.async_add_executor_job(self._fetch_account)
+        except Exception:
+            _LOGGER.exception("Failed to fetch account details from Thames Water")
+            self._attr_native_value = None
+            self._current_balance = None
+            self._is_in_credit = None
+            return
+
+        self._attr_native_value = float(account.paymentDueAmount)
+        self._current_balance = float(account.currentBalance)
+        self._is_in_credit = account.isInCredit
