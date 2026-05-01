@@ -12,6 +12,6 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/jelmer/HA-Thames-Water/issues",
-  "requirements": ["thameswaterapi>=0.3.0"],
-  "version": "1.1.0"
+  "requirements": ["thameswaterapi>=0.3.1"],
+  "version": "1.1.1"
 }
