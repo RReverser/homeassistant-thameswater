@@ -8,9 +8,14 @@ This Home Assistant integration retrieves water consumption data from Thames Wat
 
 You need a Thames Water Smart Meter. The water consumption data provided by this integration is delayed by approximately three days or more. This delay is a characteristic of the Thames Water data system and cannot be altered in this integration.
 
-The integration uses Selenium to log in to the Thames Water website, as it needs to obtain the browser cookies to make the API call. I use the Selenium Addon in Home Assistant.
-
 It uses the [thameswaterapi](https://github.com/jelmer/thameswaterapi) Python package to interact with the Thames Water API.
+
+## Sensors
+
+The integration exposes the following entities:
+
+* **Water consumption** — the latest hourly meter read in litres, with both hourly and daily external statistics injected for use in the Energy dashboard.
+* **Outstanding balance** — the amount currently due on your Thames Water account in GBP. The current balance and an `is_in_credit` flag are exposed as attributes.
 
 ## Installation
 
