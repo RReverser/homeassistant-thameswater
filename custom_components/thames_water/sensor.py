@@ -12,7 +12,10 @@ from zoneinfo import ZoneInfo
 from thameswaterapi import (
     Account,
     MeterUsage,
+    Tariff,
+    TariffError,
     ThamesWater,
+    get_tariff,
     meter_usage_lines_to_timeseries,
 )
 
@@ -41,7 +44,6 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
-from .tariff import Tariff, TariffError, fetch_tariff
 
 _LOGGER = logging.getLogger(__name__)
 SELENIUM_TIMEOUT = 60
@@ -421,7 +423,7 @@ class ThamesWaterTariffCoordinator(DataUpdateCoordinator[Tariff]):
     async def _async_update_data(self) -> Tariff:
         """Fetch and parse the tariff (blocking work runs in an executor)."""
         try:
-            return await self.hass.async_add_executor_job(fetch_tariff)
+            return await self.hass.async_add_executor_job(get_tariff)
         except TariffError as err:
             raise UpdateFailed(str(err)) from err
 
