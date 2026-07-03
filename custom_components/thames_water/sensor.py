@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
 from typing import Literal
@@ -23,6 +25,7 @@ from homeassistant.components.recorder.statistics import async_add_external_stat
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -30,12 +33,21 @@ from homeassistant.const import CONF_NAME, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
+from .tariff import Tariff, TariffError, fetch_tariff
 
 _LOGGER = logging.getLogger(__name__)
 SELENIUM_TIMEOUT = 60
+
+# The tariff is a fixed annual published scheme, so once a day is ample.
+TARIFF_SCAN_INTERVAL = timedelta(hours=24)
 
 
 async def async_setup_entry(
@@ -85,6 +97,16 @@ async def async_setup_entry(
         hass,
         balance_sensor.async_update_callback,
         timedelta(hours=update_interval_hours),
+    )
+
+    # Tariff sensors. These scrape a public, region-wide page and need no
+    # credentials, so they run on their own coordinator. A failure here must not
+    # break consumption/balance, so we refresh without raising ConfigEntryNotReady.
+    tariff_coordinator = ThamesWaterTariffCoordinator(hass)
+    await tariff_coordinator.async_refresh()
+    async_add_entities(
+        ThamesWaterTariffSensor(tariff_coordinator, description)
+        for description in TARIFF_SENSORS
     )
     return True
 
@@ -382,3 +404,129 @@ class ThamesWaterBalanceSensor(SensorEntity):
         self._attr_native_value = float(account.paymentDueAmount)
         self._current_balance = float(account.currentBalance)
         self._is_in_credit = account.isInCredit
+
+
+class ThamesWaterTariffCoordinator(DataUpdateCoordinator[Tariff]):
+    """Coordinator that scrapes the current Thames Water tariff once a day."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the tariff coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            name="Thames Water tariff",
+            update_interval=TARIFF_SCAN_INTERVAL,
+        )
+
+    async def _async_update_data(self) -> Tariff:
+        """Fetch and parse the tariff (blocking work runs in an executor)."""
+        try:
+            return await self.hass.async_add_executor_job(fetch_tariff)
+        except TariffError as err:
+            raise UpdateFailed(str(err)) from err
+
+
+@dataclass(frozen=True, kw_only=True)
+class ThamesWaterTariffSensorDescription(SensorEntityDescription):
+    """Describes a Thames Water tariff sensor."""
+
+    value_fn: Callable[[Tariff], float]
+
+
+TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
+    ThamesWaterTariffSensorDescription(
+        key="unit_rate",
+        name="Thames Water Unit Rate",
+        native_unit_of_measurement="GBP/L",
+        icon="mdi:cash",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=6,
+        value_fn=lambda tariff: tariff.unit_rate_per_litre,
+    ),
+    ThamesWaterTariffSensorDescription(
+        key="standing_charge",
+        name="Thames Water Standing Charge",
+        native_unit_of_measurement="GBP/d",
+        icon="mdi:cash-clock",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda tariff: tariff.standing_charge_per_day,
+    ),
+    ThamesWaterTariffSensorDescription(
+        key="volumetric_rate",
+        name="Thames Water Volumetric Rate",
+        native_unit_of_measurement="GBP/m³",
+        icon="mdi:cash",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda tariff: tariff.volumetric_rate_per_m3,
+    ),
+    ThamesWaterTariffSensorDescription(
+        key="clean_water_rate",
+        name="Thames Water Clean Water Rate",
+        native_unit_of_measurement="GBP/m³",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        entity_registry_enabled_default=False,
+        value_fn=lambda tariff: tariff.clean_water_rate_per_m3,
+    ),
+    ThamesWaterTariffSensorDescription(
+        key="wastewater_rate",
+        name="Thames Water Wastewater Rate",
+        native_unit_of_measurement="GBP/m³",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        entity_registry_enabled_default=False,
+        value_fn=lambda tariff: tariff.wastewater_rate_per_m3,
+    ),
+    ThamesWaterTariffSensorDescription(
+        key="water_fixed_charge",
+        name="Thames Water Water Fixed Charge",
+        native_unit_of_measurement="GBP/year",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        entity_registry_enabled_default=False,
+        value_fn=lambda tariff: tariff.water_fixed_per_year,
+    ),
+    ThamesWaterTariffSensorDescription(
+        key="wastewater_fixed_charge",
+        name="Thames Water Wastewater Fixed Charge",
+        native_unit_of_measurement="GBP/year",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        entity_registry_enabled_default=False,
+        value_fn=lambda tariff: tariff.wastewater_fixed_per_year,
+    ),
+)
+
+
+class ThamesWaterTariffSensor(
+    CoordinatorEntity[ThamesWaterTariffCoordinator], SensorEntity
+):
+    """A sensor derived from the scraped Thames Water tariff."""
+
+    entity_description: ThamesWaterTariffSensorDescription
+
+    def __init__(
+        self,
+        coordinator: ThamesWaterTariffCoordinator,
+        description: ThamesWaterTariffSensorDescription,
+    ) -> None:
+        """Initialize the tariff sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_name = description.name
+        self._attr_unique_id = f"thames_water_tariff_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "thames_water_tariff")},
+            manufacturer="Thames Water",
+            model="Tariff",
+            name="Thames Water Tariff",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the value derived from the current tariff."""
+        if self.coordinator.data is None:
+            return None
+        return self.entity_description.value_fn(self.coordinator.data)

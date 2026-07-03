@@ -16,6 +16,17 @@ The integration exposes the following entities:
 
 * **Water consumption** — the latest hourly meter read in litres, with both hourly and daily external statistics injected for use in the Energy dashboard.
 * **Outstanding balance** — the amount currently due on your Thames Water account in GBP. The current balance and an `is_in_credit` flag are exposed as attributes.
+* **Tariff** — the current metered-household charges for the Thames Water region:
+  * **Unit Rate** (`GBP/L`) — combined clean water + wastewater volumetric rate, per litre. Because it is denominated in litres it can be attached directly to the Energy dashboard water source as the price entity.
+  * **Standing Charge** (`GBP/day`) — combined water + wastewater fixed charge per day.
+  * **Volumetric Rate** (`GBP/m³`) — the combined rate per cubic metre.
+  * Individual **Clean Water Rate**, **Wastewater Rate**, **Water Fixed Charge** and **Wastewater Fixed Charge** sensors (disabled by default; enable them for a full bill breakdown).
+
+  Thames Water has no tariff API — metered charges are a fixed annual "Scheme of Charges", published per region rather than per account, so the same figures apply to every customer. This integration reads them from Thames Water's public [metered customers](https://www.thameswater.co.uk/help/account-and-billing/understand-your-bill/metered-customers) help page (no credentials required) and refreshes daily; they normally only change on 1 April. The fixed charges use the standard rate (not the surface-water-drainage rebate rate). If the page layout ever changes the tariff sensors become unavailable but consumption and balance are unaffected.
+
+### Water cost in the Energy dashboard
+
+Attach the **Unit Rate** sensor as the price for your water source: in **Settings → Dashboards → Energy → Water consumption**, edit the source and choose *Use an entity tracking the total costs*/*Use a price entity* and select `sensor.thames_water_unit_rate`. (The standing charge is a flat daily amount and is not part of the volumetric price.)
 
 ## Installation
 
