@@ -337,7 +337,7 @@ class ThamesWaterBalanceSensor(SensorEntity):
     """Sensor exposing the outstanding balance on the Thames Water account."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "GBP"
+    _attr_native_unit_of_measurement = "£"
     _attr_state_class = SensorStateClass.TOTAL
     _attr_should_poll = False
     _attr_name = "Thames Water Outstanding Balance"
@@ -439,7 +439,7 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
     ThamesWaterTariffSensorDescription(
         key="unit_rate",
         name="Thames Water Unit Rate",
-        native_unit_of_measurement="GBP/L",
+        native_unit_of_measurement="£/L",
         icon="mdi:cash",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=6,
@@ -448,7 +448,7 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
     ThamesWaterTariffSensorDescription(
         key="standing_charge",
         name="Thames Water Standing Charge",
-        native_unit_of_measurement="GBP/d",
+        native_unit_of_measurement="£/d",
         icon="mdi:cash-clock",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
@@ -457,7 +457,7 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
     ThamesWaterTariffSensorDescription(
         key="volumetric_rate",
         name="Thames Water Volumetric Rate",
-        native_unit_of_measurement="GBP/m³",
+        native_unit_of_measurement="£/m³",
         icon="mdi:cash",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
@@ -466,7 +466,7 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
     ThamesWaterTariffSensorDescription(
         key="clean_water_rate",
         name="Thames Water Clean Water Rate",
-        native_unit_of_measurement="GBP/m³",
+        native_unit_of_measurement="£/m³",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         entity_registry_enabled_default=False,
@@ -475,7 +475,7 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
     ThamesWaterTariffSensorDescription(
         key="wastewater_rate",
         name="Thames Water Wastewater Rate",
-        native_unit_of_measurement="GBP/m³",
+        native_unit_of_measurement="£/m³",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         entity_registry_enabled_default=False,
@@ -484,7 +484,7 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
     ThamesWaterTariffSensorDescription(
         key="water_fixed_charge",
         name="Thames Water Water Fixed Charge",
-        native_unit_of_measurement="GBP/year",
+        native_unit_of_measurement="£/year",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         entity_registry_enabled_default=False,
@@ -493,7 +493,7 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
     ThamesWaterTariffSensorDescription(
         key="wastewater_fixed_charge",
         name="Thames Water Wastewater Fixed Charge",
-        native_unit_of_measurement="GBP/year",
+        native_unit_of_measurement="£/year",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         entity_registry_enabled_default=False,
