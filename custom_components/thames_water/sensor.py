@@ -9,6 +9,7 @@ import logging
 from thameswaterapi import Tariff
 
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
@@ -206,9 +207,14 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
 
 
 class ThamesWaterTariffSensor(
-    CoordinatorEntity[ThamesWaterTariffCoordinator], SensorEntity
+    CoordinatorEntity[ThamesWaterTariffCoordinator], RestoreSensor
 ):
-    """A sensor derived from the scraped Thames Water tariff."""
+    """A sensor derived from the scraped Thames Water tariff.
+
+    The figures change about once a year, so the last known ones are worth
+    more than nothing while the page is unreachable or a restart is in
+    progress; they are restored until a scrape succeeds.
+    """
 
     entity_description: ThamesWaterTariffSensorDescription
 
@@ -228,10 +234,17 @@ class ThamesWaterTariffSensor(
             model="Tariff",
             name="Thames Water Tariff",
         )
+        self._restored_value: float | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last known figure for use until a scrape succeeds."""
+        await super().async_added_to_hass()
+        if (last_data := await self.async_get_last_sensor_data()) is not None:
+            self._restored_value = last_data.native_value
 
     @property
     def native_value(self) -> float | None:
         """Return the value derived from the current tariff."""
         if self.coordinator.data is None:
-            return None
+            return self._restored_value
         return self.entity_description.value_fn(self.coordinator.data)

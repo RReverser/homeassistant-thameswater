@@ -50,8 +50,11 @@ HOURLY_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_hourly"
 DAILY_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_daily"
 CONSUMPTION_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption"
 
-# The tariff is a fixed annual published scheme, so once a day is ample.
-TARIFF_SCAN_INTERVAL = timedelta(hours=24)
+# The charges are a published annual scheme, but a longer cache would hide a
+# break in the page parser for up to a year, and they are not guaranteed to
+# change only in April: water price controls are subject to CMA
+# redetermination. One unauthenticated GET on a public page either way.
+TARIFF_SCAN_INTERVAL = timedelta(days=7)
 
 # Backoff for a response that did not parse, doubling from a minute.
 MIN_BACKOFF = timedelta(seconds=60)
