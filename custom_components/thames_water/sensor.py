@@ -4,18 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import logging
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from thameswaterapi import (
     Account,
+    Line,
     MeterUsage,
     Tariff,
     TariffError,
     ThamesWater,
     get_tariff,
+    lines_to_timeseries,
     meter_usage_lines_to_timeseries,
 )
 
@@ -47,6 +49,9 @@ from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 SELENIUM_TIMEOUT = 60
+
+# Meter readings are labelled in local clock time.
+LONDON_TZ = ZoneInfo("Europe/London")
 
 # The tariff is a fixed annual published scheme, so once a day is ample.
 TARIFF_SCAN_INTERVAL = timedelta(hours=24)
@@ -138,22 +143,19 @@ def _generate_hourly_statistics_from_meter_usage(
     ]
 
 
-def _generate_daily_statistics_from_meter_usage(
-    start: date, meter_usage: MeterUsage
-) -> list[StatisticData]:
-    """Convert daily meter usage lines into StatisticData entries."""
-    tz = ZoneInfo("Europe/London")
-    if isinstance(start, datetime):
-        day = start.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
-    else:
-        day = datetime(start.year, start.month, start.day, tzinfo=tz)
+def _generate_daily_statistics(lines: list[Line]) -> list[StatisticData]:
+    """Convert daily meter usage lines into StatisticData entries.
+
+    Each date comes from its own line's dated label, so a day missing from
+    the response leaves a gap rather than shifting every later reading.
+    """
     return [
         StatisticData(
-            start=day + timedelta(days=i),
-            state=int(line.Usage),
-            sum=int(line.Read),
+            start=datetime.combine(measurement.start, time.min, tzinfo=LONDON_TZ),
+            state=measurement.usage,
+            sum=measurement.total,
         )
-        for i, line in enumerate(meter_usage.Lines)
+        for measurement in lines_to_timeseries(lines)
     ]
 
 
@@ -311,9 +313,7 @@ class ThamesWaterSensor(SensorEntity):
         # Daily statistics
         if daily_usage is not None and len(daily_usage.Lines) > 0:
             _LOGGER.info("Fetched %d daily entries", len(daily_usage.Lines))
-            daily_stats = _generate_daily_statistics_from_meter_usage(
-                start_dt, daily_usage
-            )
+            daily_stats = _generate_daily_statistics(daily_usage.Lines)
             if self._state is None:
                 self._state = daily_usage.Lines[-1].Read
             self._inject_statistics(
