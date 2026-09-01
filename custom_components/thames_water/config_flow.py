@@ -60,8 +60,10 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             self._credentials["account_number"] = user_input["account_number"]
-            self._client.account_number = int(user_input["account_number"])
-            await self.hass.async_add_executor_job(self._client._visit_meter_page)
+            # Assigning the account re-scopes the session to it.
+            await self.hass.async_add_executor_job(
+                setattr, self._client, "account_number", int(user_input["account_number"])
+            )
             return await self.async_step_meter()
 
         account_options = {str(n): str(n) for n in account_numbers}
@@ -116,4 +118,6 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     def _authenticate(username: str, password: str) -> ThamesWater:
         """Authenticate with Thames Water (blocking, run in executor)."""
-        return ThamesWater(email=username, password=password)
+        client = ThamesWater(email=username, password=password)
+        client.authenticate()
+        return client
