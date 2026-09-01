@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from unittest.mock import MagicMock
 
 from thameswaterapi import AuthenticationError, MalformedResponse, RateLimitError
@@ -15,9 +15,16 @@ from custom_components.thames_water.coordinator import (
     CONSUMPTION_STATISTIC_ID,
     COST_STATISTIC_ID,
     HOURLY_STATISTIC_ID,
+    INITIAL_HISTORY,
+    LONDON_TZ,
 )
 
-from .conftest import ACCOUNT_NUMBER, METER_ID, hourly_lines, make_meter_usage
+from .conftest import (
+    ACCOUNT_NUMBER,
+    METER_ID,
+    PUBLICATION_LAG_DAYS,
+    make_meter_usage,
+)
 
 
 async def _setup(hass: HomeAssistant, config_entry) -> None:
@@ -67,42 +74,44 @@ async def test_one_authentication_per_refresh(
     assert client.get_account.call_count == 1
 
 
-async def test_every_day_is_asked_for_hourly(
+async def test_one_hourly_request_covers_the_whole_window(
     integration, hass: HomeAssistant, config_entry, client, statistics
 ) -> None:
     await _setup(hass, config_entry)
 
-    granularities = {
-        call.kwargs.get("granularity", "H")
-        for call in client.get_meter_usage.call_args_list
-    }
-    assert granularities == {"H"}
-    # With no statistics yet the window is the initial backfill.
-    assert client.get_meter_usage.call_count == 31
-    # Nothing came back empty behind a day that had readings, so no daily
-    # request was needed.
+    client.get_meter_usage.assert_called_once()
+    args = client.get_meter_usage.call_args
+    assert args.kwargs["granularity"] == "H"
+    # With no statistics yet the window is the initial backfill, asked for in
+    # that one request rather than one per day.
+    assert args.args[1] == date.today() - INITIAL_HISTORY
+    assert args.args[2] == date.today()
     client.get_meter_usage_lines.assert_not_called()
 
 
-async def test_a_gap_behind_the_frontier_falls_back_to_daily(
+async def test_a_short_response_is_taken_as_it_comes(
     integration, hass: HomeAssistant, config_entry, client, statistics
 ) -> None:
-    published = date.today() - timedelta(days=3)
-    missing = date.today() - timedelta(days=10)
+    # The days after the publication lag are absent, not empty rows, and
+    # nothing asks for them again at another granularity.
+    await _setup(hass, config_entry)
 
-    def get_meter_usage(meter, start, end, granularity="H"):
-        if start == missing or start > published:
-            return make_meter_usage([])
-        return make_meter_usage(hourly_lines(1000.0))
+    written = _written(statistics, CONSUMPTION_STATISTIC_ID)
+    newest = max(row["start"] for row in written)
+    assert newest.date() == date.today() - timedelta(days=PUBLICATION_LAG_DAYS)
+    client.get_meter_usage_lines.assert_not_called()
 
-    client.get_meter_usage.side_effect = get_meter_usage
+
+async def test_an_empty_response_writes_nothing(
+    integration, hass: HomeAssistant, config_entry, client, statistics
+) -> None:
+    client.get_meter_usage.side_effect = None
+    client.get_meter_usage.return_value = make_meter_usage([])
 
     await _setup(hass, config_entry)
 
-    client.get_meter_usage_lines.assert_called_once()
-    args = client.get_meter_usage_lines.call_args
-    assert args.args[1] == missing
-    assert args.kwargs["granularity"] == "D"
+    assert config_entry.state is ConfigEntryState.LOADED
+    statistics.assert_not_called()
 
 
 async def test_statistics_are_written(
@@ -111,8 +120,12 @@ async def test_statistics_are_written(
     await _setup(hass, config_entry)
 
     hourly = _written(statistics, HOURLY_STATISTIC_ID)
+    # 30 days of backfill, of which the last three are not published yet.
     assert len(hourly) == 28 * 24
     assert hourly[0]["sum"] == 1000.0
+    assert hourly[0]["start"] == datetime.combine(
+        date.today() - INITIAL_HISTORY, time.min, tzinfo=LONDON_TZ
+    )
 
     consumption = _written(statistics, CONSUMPTION_STATISTIC_ID)
     assert len(consumption) == len(hourly)

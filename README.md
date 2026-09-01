@@ -14,7 +14,7 @@ It uses the [thameswaterapi](https://github.com/jelmer/thameswaterapi) Python pa
 
 The integration exposes the following entities:
 
-* **Water consumption** — the latest meter read in litres, with hourly and daily external statistics injected for use in the Energy dashboard, and a cost statistic in GBP alongside them.
+* **Water consumption** — the latest meter read in litres, with hourly external statistics injected for use in the Energy dashboard, and a cost statistic in GBP alongside them.
 * **Outstanding balance** — the amount currently due on your Thames Water account, in GBP. The current balance and an `is_in_credit` flag are exposed as attributes.
 * **Tariff** — the current metered-household charges for the Thames Water region:
   * **Unit Rate** (`GBP/L`) — combined clean water + wastewater volumetric rate, per litre.
@@ -86,9 +86,13 @@ Then, add the integration:
 
 The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**, with **thames_water:thameswater_consumption_cost** as the cost statistic.
 
-Data is fetched every 12 hours by default, and each refresh asks only for the
-days missing since the last one — so an instance that was switched off for a
-while catches up rather than losing those days.
+Data is fetched every 12 hours by default, in a single hourly request covering
+everything missing since the last one — so an instance that was switched off for
+a while catches up in one go rather than losing those days.
+
+Readings run about three days behind. A response ending today is truncated at a
+whole-day boundary rather than padded, so the days not yet published are simply
+absent and the next refresh asks for them again.
 
 [![Open your Home Assistant instance and show your Energy configuration panel.](https://my.home-assistant.io/badges/config_energy.svg)](https://my.home-assistant.io/redirect/config_energy/)
 

@@ -9,18 +9,11 @@ from homeassistant.components.recorder.models import StatisticData
 from thameswaterapi import Line, Tariff
 
 from custom_components.thames_water.coordinator import (
-    days_in_range,
-    days_needing_daily,
-    generate_daily_statistics,
     generate_hourly_statistics,
     price_readings,
 )
 
 LONDON_TZ = ZoneInfo("Europe/London")
-
-# Daily labels carry no year, so the library infers one from today's date.
-# January is unambiguous whenever the response is read.
-YEAR = date.today().year
 
 
 def _make_line(usage: float, read: float, label: str = "") -> Line:
@@ -34,6 +27,13 @@ def _make_line(usage: float, read: float, label: str = "") -> Line:
 
 
 class TestGenerateHourlyStatistics:
+    def _day(self, skip=()):
+        return [
+            _make_line(10.0, 100.0 + hour * 10, f"{hour}:00")
+            for hour in range(24)
+            if hour not in skip
+        ]
+
     def test_empty_lines(self) -> None:
         assert generate_hourly_statistics(date(2024, 1, 1), []) == []
 
@@ -46,7 +46,7 @@ class TestGenerateHourlyStatistics:
         assert stats[0]["state"] == 10
         assert stats[0]["sum"] == 100
 
-    def test_multiple_lines(self) -> None:
+    def test_one_day(self) -> None:
         stats = generate_hourly_statistics(
             date(2024, 1, 1),
             [
@@ -62,6 +62,23 @@ class TestGenerateHourlyStatistics:
         ]
         assert [stat["state"] for stat in stats] == [10, 20, 5]
 
+    def test_a_window_spans_as_many_days_as_it_carries(self) -> None:
+        stats = generate_hourly_statistics(
+            date(2026, 2, 10), self._day() + self._day() + self._day()
+        )
+        assert len(stats) == 72
+        assert stats[23]["start"] == datetime(2026, 2, 10, 23, 0, tzinfo=LONDON_TZ)
+        assert stats[24]["start"] == datetime(2026, 2, 11, 0, 0, tzinfo=LONDON_TZ)
+        assert stats[-1]["start"] == datetime(2026, 2, 12, 23, 0, tzinfo=LONDON_TZ)
+
+    def test_a_short_day_does_not_drag_the_next_one_back(self) -> None:
+        # 29 March 2026 is 23 hours long: there is no 1:00 local.
+        stats = generate_hourly_statistics(
+            date(2026, 3, 28), self._day() + self._day(skip={1}) + self._day()
+        )
+        assert len(stats) == 71
+        assert stats[-1]["start"] == datetime(2026, 3, 30, 23, 0, tzinfo=LONDON_TZ)
+
     def test_a_missing_hour_does_not_shift_the_rest(self) -> None:
         stats = generate_hourly_statistics(
             date(2024, 1, 1),
@@ -72,107 +89,18 @@ class TestGenerateHourlyStatistics:
             datetime(2024, 1, 1, 14, 0, tzinfo=LONDON_TZ),
         ]
 
-
-class TestGenerateDailyStatistics:
-    def test_empty_lines(self) -> None:
-        assert generate_daily_statistics([]) == []
-
-    def test_single_line(self) -> None:
-        stats = generate_daily_statistics([_make_line(100.0, 1000.0, "1-January")])
-        assert len(stats) == 1
-        assert stats[0]["start"] == datetime(YEAR, 1, 1, 0, 0, tzinfo=LONDON_TZ)
-        assert stats[0]["state"] == 100
-        assert stats[0]["sum"] == 1000
-
-    def test_multiple_lines(self) -> None:
-        stats = generate_daily_statistics(
-            [
-                _make_line(100.0, 1000.0, "1-January"),
-                _make_line(150.0, 1150.0, "2-January"),
-                _make_line(80.0, 1230.0, "3-January"),
-            ]
-        )
-        assert [stat["start"] for stat in stats] == [
-            datetime(YEAR, 1, 1, 0, 0, tzinfo=LONDON_TZ),
-            datetime(YEAR, 1, 2, 0, 0, tzinfo=LONDON_TZ),
-            datetime(YEAR, 1, 3, 0, 0, tzinfo=LONDON_TZ),
-        ]
-        assert [stat["state"] for stat in stats] == [100, 150, 80]
-
-    def test_a_missing_day_does_not_shift_the_rest(self) -> None:
-        # 2 January is absent from the response; 3 January must stay on the
-        # 3rd rather than sliding back into the gap.
-        stats = generate_daily_statistics(
-            [
-                _make_line(100.0, 1000.0, "1-January"),
-                _make_line(80.0, 1230.0, "3-January"),
-            ]
-        )
-        assert [stat["start"] for stat in stats] == [
-            datetime(YEAR, 1, 1, 0, 0, tzinfo=LONDON_TZ),
-            datetime(YEAR, 1, 3, 0, 0, tzinfo=LONDON_TZ),
-        ]
-
-    def test_timestamps_are_timezone_aware(self) -> None:
-        stats = generate_daily_statistics([_make_line(100.0, 1000.0, "1-January")])
-        assert stats[0]["start"].tzinfo is not None
-
     def test_usage_values_are_truncated_to_int(self) -> None:
-        stats = generate_daily_statistics([_make_line(99.7, 1000.3, "1-January")])
+        stats = generate_hourly_statistics(
+            date(2024, 1, 1), [_make_line(99.7, 1000.3, "0:00")]
+        )
         assert stats[0]["state"] == 99
         assert stats[0]["sum"] == 1000
 
-
-class TestFetchPlanning:
-    def test_days_in_range_is_inclusive(self) -> None:
-        assert days_in_range(date(2026, 3, 1), date(2026, 3, 3)) == [
-            date(2026, 3, 1),
-            date(2026, 3, 2),
-            date(2026, 3, 3),
-        ]
-
-    def test_days_in_range_of_one_day(self) -> None:
-        assert days_in_range(date(2026, 3, 1), date(2026, 3, 1)) == [date(2026, 3, 1)]
-
-
-class TestDaysNeedingDaily:
-    def test_a_gap_behind_the_newest_reading(self) -> None:
-        hourly = {
-            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
-            date(2026, 3, 2): [],
-            date(2026, 3, 3): [_make_line(1.0, 1.0, "0:00")],
-        }
-        assert days_needing_daily(hourly) == [date(2026, 3, 2)]
-
-    def test_unpublished_days_are_not_a_gap(self) -> None:
-        # The steady state: the last few days are simply not out yet, and
-        # asking for them at daily resolution would not produce them either.
-        hourly = {
-            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
-            date(2026, 3, 2): [],
-            date(2026, 3, 3): [],
-        }
-        assert days_needing_daily(hourly) == []
-
-    def test_nothing_at_all(self) -> None:
-        assert days_needing_daily({date(2026, 3, 1): [], date(2026, 3, 2): []}) == []
-
-    def test_every_day_answered(self) -> None:
-        hourly = {
-            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
-            date(2026, 3, 2): [_make_line(1.0, 1.0, "0:00")],
-        }
-        assert days_needing_daily(hourly) == []
-
-    def test_several_gaps_are_returned_in_order(self) -> None:
-        hourly = {
-            date(2026, 3, 4): [],
-            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
-            date(2026, 3, 2): [],
-            date(2026, 3, 3): [_make_line(1.0, 1.0, "0:00")],
-        }
-        # 4 March is beyond the frontier, so only 2 March counts.
-        assert days_needing_daily(hourly) == [date(2026, 3, 2)]
+    def test_timestamps_are_timezone_aware(self) -> None:
+        stats = generate_hourly_statistics(
+            date(2024, 1, 1), [_make_line(10.0, 100.0, "0:00")]
+        )
+        assert stats[0]["start"].tzinfo is not None
 
 
 TARIFF = Tariff(

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 import logging
 from zoneinfo import ZoneInfo
 
@@ -17,7 +17,6 @@ from thameswaterapi import (
     TariffError,
     ThamesWater,
     get_tariff,
-    lines_to_timeseries,
     meter_usage_lines_to_timeseries,
 )
 
@@ -47,7 +46,6 @@ _LOGGER = logging.getLogger(__name__)
 LONDON_TZ = ZoneInfo("Europe/London")
 
 HOURLY_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_hourly"
-DAILY_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_daily"
 CONSUMPTION_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption"
 COST_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_cost"
 
@@ -70,11 +68,11 @@ INITIAL_HISTORY = timedelta(days=30)
 
 @dataclass
 class ThamesWaterReadings:
-    """One refresh's readings, keyed by the granularity they arrived at."""
+    """One refresh's readings and the day the window they cover starts on."""
 
     account: Account
-    hourly: dict[date, list[Line]] = field(default_factory=dict)
-    daily: list[Line] = field(default_factory=list)
+    start_day: date
+    lines: list[Line]
 
 
 @dataclass
@@ -96,52 +94,22 @@ class ThamesWaterRuntimeData:
     tariff_coordinator: ThamesWaterTariffCoordinator
 
 
-def days_in_range(start: date, end: date) -> list[date]:
-    """Return every day from ``start`` to ``end`` inclusive."""
-    return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+def generate_hourly_statistics(
+    start_day: date, lines: list[Line]
+) -> list[StatisticData]:
+    """Convert a window of hourly meter usage lines into StatisticData.
 
-
-def days_needing_daily(hourly: dict[date, list[Line]]) -> list[date]:
-    """Return the days hourly data was asked for and did not arrive.
-
-    A day with no hourly lines that sits behind a day that has some is a gap
-    the hourly endpoint will not fill, so it is asked for again at daily
-    resolution. A day with no hourly lines beyond that frontier has simply
-    not been published yet: nothing is missing and nothing else is asked.
+    The library timestamps each reading by taking the hour from its label
+    and the day from a cursor that advances at every midnight, so the window
+    can be as wide as the caller likes.
     """
-    with_readings = [day for day, lines in hourly.items() if lines]
-    if not with_readings:
-        return []
-
-    frontier = max(with_readings)
-    return sorted(day for day, lines in hourly.items() if not lines and day < frontier)
-
-
-def generate_hourly_statistics(day: date, lines: list[Line]) -> list[StatisticData]:
-    """Convert one day of hourly meter usage lines into StatisticData."""
     return [
         StatisticData(
             start=measurement.hour_start,
             state=measurement.usage,
             sum=measurement.total,
         )
-        for measurement in meter_usage_lines_to_timeseries(day, lines)
-    ]
-
-
-def generate_daily_statistics(lines: list[Line]) -> list[StatisticData]:
-    """Convert daily meter usage lines into StatisticData entries.
-
-    Each date comes from its own line's dated label, so a day missing from
-    the response leaves a gap rather than shifting every later reading.
-    """
-    return [
-        StatisticData(
-            start=datetime.combine(measurement.start, time.min, tzinfo=LONDON_TZ),
-            state=measurement.usage,
-            sum=measurement.total,
-        )
-        for measurement in lines_to_timeseries(lines)
+        for measurement in meter_usage_lines_to_timeseries(start_day, lines)
     ]
 
 
@@ -290,32 +258,20 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         self._client.authenticate()
 
         today = dt_util.now(LONDON_TZ).date()
-        readings = ThamesWaterReadings(account=self._client.get_account())
 
-        # Hourly is what the meter is worth reading at, so every day in the
-        # window is asked for at that resolution, one request each. Days
-        # Thames Water has not published yet answer with no lines, which is a
-        # valid answer meaning exactly that.
-        days = days_in_range(start_day, today)
-        _LOGGER.debug("Asking for %d days of hourly readings", len(days))
-        for day in days:
-            readings.hourly[day] = self._client.get_meter_usage(
-                self._meter_id, day, day, granularity="H"
-            ).Lines
+        # One request, whatever the window is: a response ending today is
+        # truncated on a whole-day boundary rather than padded, so the days
+        # not yet published are simply absent from it.
+        _LOGGER.debug("Asking for hourly readings from %s to %s", start_day, today)
+        usage = self._client.get_meter_usage(
+            self._meter_id, start_day, today, granularity="H"
+        )
 
-        # Daily is the fallback for the days hourly left empty behind the
-        # newest day it did return. One request covers 299 of them.
-        if missing := days_needing_daily(readings.hourly):
-            _LOGGER.debug(
-                "No hourly readings for %d days up to %s; asking daily",
-                len(missing),
-                missing[-1],
-            )
-            readings.daily = self._client.get_meter_usage_lines(
-                self._meter_id, missing[0], missing[-1], granularity="D"
-            )
-
-        return readings
+        return ThamesWaterReadings(
+            account=self._client.get_account(),
+            start_day=start_day,
+            lines=usage.Lines,
+        )
 
     def _write_statistics(self, readings: ThamesWaterReadings) -> list[StatisticData]:
         """Write the consumption statistics and return the rows written.
@@ -324,25 +280,14 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         is no data for that range: nothing is written and the watermark stays
         where it was, so the next cycle asks again.
         """
-        hourly: list[StatisticData] = []
-        for day, lines in sorted(readings.hourly.items()):
-            hourly.extend(generate_hourly_statistics(day, lines))
-        daily = generate_daily_statistics(readings.daily)
-
-        if hourly:
-            self._inject(
-                HOURLY_STATISTIC_ID, "Thames Water Consumption (Hourly)", hourly
-            )
-        if daily:
-            self._inject(DAILY_STATISTIC_ID, "Thames Water Consumption (Daily)", daily)
-
-        combined = sorted(hourly + daily, key=lambda row: row["start"])
-        if not combined:
+        hourly = generate_hourly_statistics(readings.start_day, readings.lines)
+        if not hourly:
             _LOGGER.debug("Thames Water published no readings for this window")
             return []
 
-        self._inject(CONSUMPTION_STATISTIC_ID, "Thames Water Consumption", combined)
-        return combined
+        self._inject(HOURLY_STATISTIC_ID, "Thames Water Consumption (Hourly)", hourly)
+        self._inject(CONSUMPTION_STATISTIC_ID, "Thames Water Consumption", hourly)
+        return hourly
 
     async def _async_write_cost_statistics(
         self, consumption: list[StatisticData]

@@ -16,6 +16,9 @@ from custom_components.thames_water.const import DOMAIN
 METER_ID = "311307160"
 ACCOUNT_NUMBER = "900000000000"
 
+# Readings are published about three days in arrears.
+PUBLICATION_LAG_DAYS = 3
+
 TARIFF = Tariff(
     clean_water_rate_per_m3=2.0,
     wastewater_rate_per_m3=1.0,
@@ -62,17 +65,18 @@ def make_meter_usage(lines: list[Line]) -> MeterUsage:
     )
 
 
-def hourly_lines(read: float, hours: int = 24) -> list[Line]:
-    """Build a day of hourly lines whose odometer climbs by 10L an hour."""
+def hourly_lines(days: int, read: float = 1000.0) -> list[Line]:
+    """Build whole days of hourly lines, the odometer climbing 10L an hour."""
     return [
         Line(
             Label=f"{hour}:00",
             Usage=10.0,
-            Read=read + hour * 10,
+            Read=read + (day * 24 + hour) * 10,
             IsEstimated=False,
             MeterSerialNumberHis=METER_ID,
         )
-        for hour in range(hours)
+        for day in range(days)
+        for hour in range(24)
     ]
 
 
@@ -105,14 +109,14 @@ def client() -> Generator[MagicMock]:
         ),
     ):
         client = client_class.return_value
-        published = date.today() - timedelta(days=3)
 
         def get_meter_usage(meter, start, end, granularity="H"):
-            # Only days up to the publication lag have readings.
-            return make_meter_usage(hourly_lines(1000.0) if start <= published else [])
+            # The response is truncated on a whole-day boundary at the
+            # publication lag, never padded out to the end of the window.
+            published = date.today() - timedelta(days=PUBLICATION_LAG_DAYS)
+            return make_meter_usage(hourly_lines((published - start).days + 1))
 
         client.get_meter_usage.side_effect = get_meter_usage
-        client.get_meter_usage_lines.return_value = []
         client.get_account.return_value = ACCOUNT
         yield client
 
