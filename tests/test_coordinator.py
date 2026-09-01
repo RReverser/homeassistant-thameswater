@@ -10,10 +10,10 @@ from thameswaterapi import Line, Tariff
 
 from custom_components.thames_water.coordinator import (
     days_in_range,
+    days_needing_daily,
     generate_daily_statistics,
     generate_hourly_statistics,
     price_readings,
-    wants_hourly,
 )
 
 LONDON_TZ = ZoneInfo("Europe/London")
@@ -124,19 +124,6 @@ class TestGenerateDailyStatistics:
 
 
 class TestFetchPlanning:
-    def test_same_day_is_hourly(self) -> None:
-        assert wants_hourly(date(2026, 3, 1), date(2026, 3, 1))
-
-    def test_one_day_behind_is_hourly(self) -> None:
-        # The steady state at a 12-hour interval: one new day per cycle.
-        assert wants_hourly(date(2026, 3, 1), date(2026, 3, 2))
-
-    def test_two_days_behind_is_daily(self) -> None:
-        assert not wants_hourly(date(2026, 3, 1), date(2026, 3, 3))
-
-    def test_a_backfill_is_daily(self) -> None:
-        assert not wants_hourly(date(2025, 1, 1), date(2026, 3, 3))
-
     def test_days_in_range_is_inclusive(self) -> None:
         assert days_in_range(date(2026, 3, 1), date(2026, 3, 3)) == [
             date(2026, 3, 1),
@@ -146,6 +133,46 @@ class TestFetchPlanning:
 
     def test_days_in_range_of_one_day(self) -> None:
         assert days_in_range(date(2026, 3, 1), date(2026, 3, 1)) == [date(2026, 3, 1)]
+
+
+class TestDaysNeedingDaily:
+    def test_a_gap_behind_the_newest_reading(self) -> None:
+        hourly = {
+            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
+            date(2026, 3, 2): [],
+            date(2026, 3, 3): [_make_line(1.0, 1.0, "0:00")],
+        }
+        assert days_needing_daily(hourly) == [date(2026, 3, 2)]
+
+    def test_unpublished_days_are_not_a_gap(self) -> None:
+        # The steady state: the last few days are simply not out yet, and
+        # asking for them at daily resolution would not produce them either.
+        hourly = {
+            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
+            date(2026, 3, 2): [],
+            date(2026, 3, 3): [],
+        }
+        assert days_needing_daily(hourly) == []
+
+    def test_nothing_at_all(self) -> None:
+        assert days_needing_daily({date(2026, 3, 1): [], date(2026, 3, 2): []}) == []
+
+    def test_every_day_answered(self) -> None:
+        hourly = {
+            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
+            date(2026, 3, 2): [_make_line(1.0, 1.0, "0:00")],
+        }
+        assert days_needing_daily(hourly) == []
+
+    def test_several_gaps_are_returned_in_order(self) -> None:
+        hourly = {
+            date(2026, 3, 4): [],
+            date(2026, 3, 1): [_make_line(1.0, 1.0, "0:00")],
+            date(2026, 3, 2): [],
+            date(2026, 3, 3): [_make_line(1.0, 1.0, "0:00")],
+        }
+        # 4 March is beyond the frontier, so only 2 March counts.
+        assert days_needing_daily(hourly) == [date(2026, 3, 2)]
 
 
 TARIFF = Tariff(

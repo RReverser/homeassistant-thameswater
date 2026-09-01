@@ -66,6 +66,8 @@ MAX_BACKOFF = timedelta(hours=1)
 INITIAL_HISTORY = timedelta(days=30)
 
 
+
+
 @dataclass
 class ThamesWaterReadings:
     """One refresh's readings, keyed by the granularity they arrived at."""
@@ -99,15 +101,20 @@ def days_in_range(start: date, end: date) -> list[date]:
     return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
 
 
-def wants_hourly(start: date, end: date) -> bool:
-    """Whether a window that wide should be asked for hour by hour.
+def days_needing_daily(hourly: dict[date, list[Line]]) -> list[date]:
+    """Return the days hourly data was asked for and did not arrive.
 
-    Hourly labels are clock times, so an hourly request only makes sense for
-    a single day and a window of several days costs a request each. In steady
-    state the watermark is one day behind, sometimes two; anything wider is a
-    backfill and goes at daily resolution instead.
+    A day with no hourly lines that sits behind a day that has some is a gap
+    the hourly endpoint will not fill, so it is asked for again at daily
+    resolution. A day with no hourly lines beyond that frontier has simply
+    not been published yet: nothing is missing and nothing else is asked.
     """
-    return (end - start).days <= 1
+    with_readings = [day for day, lines in hourly.items() if lines]
+    if not with_readings:
+        return []
+
+    frontier = max(with_readings)
+    return sorted(day for day, lines in hourly.items() if not lines and day < frontier)
 
 
 def generate_hourly_statistics(day: date, lines: list[Line]) -> list[StatisticData]:
@@ -285,16 +292,27 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         today = dt_util.now(LONDON_TZ).date()
         readings = ThamesWaterReadings(account=self._client.get_account())
 
-        if wants_hourly(start_day, today):
-            for day in days_in_range(start_day, today):
-                readings.hourly[day] = self._client.get_meter_usage(
-                    self._meter_id, day, day, granularity="H"
-                ).Lines
-        else:
-            # Wider than the API serves in one request, so the library splits
-            # it; the response stops at the publication lag by itself.
+        # Hourly is what the meter is worth reading at, so every day in the
+        # window is asked for at that resolution, one request each. Days
+        # Thames Water has not published yet answer with no lines, which is a
+        # valid answer meaning exactly that.
+        days = days_in_range(start_day, today)
+        _LOGGER.debug("Asking for %d days of hourly readings", len(days))
+        for day in days:
+            readings.hourly[day] = self._client.get_meter_usage(
+                self._meter_id, day, day, granularity="H"
+            ).Lines
+
+        # Daily is the fallback for the days hourly left empty behind the
+        # newest day it did return. One request covers 299 of them.
+        if missing := days_needing_daily(readings.hourly):
+            _LOGGER.debug(
+                "No hourly readings for %d days up to %s; asking daily",
+                len(missing),
+                missing[-1],
+            )
             readings.daily = self._client.get_meter_usage_lines(
-                self._meter_id, start_day, today, granularity="D"
+                self._meter_id, missing[0], missing[-1], granularity="D"
             )
 
         return readings
@@ -318,7 +336,7 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         if daily:
             self._inject(DAILY_STATISTIC_ID, "Thames Water Consumption (Daily)", daily)
 
-        combined = sorted(hourly or daily, key=lambda row: row["start"])
+        combined = sorted(hourly + daily, key=lambda row: row["start"])
         if not combined:
             _LOGGER.debug("Thames Water published no readings for this window")
             return []
