@@ -17,7 +17,7 @@ The integration exposes the following entities:
 * **Water consumption** — the latest hourly meter read in litres, with both hourly and daily external statistics injected for use in the Energy dashboard.
 * **Outstanding balance** — the amount currently due on your Thames Water account, in GBP. The current balance and an `is_in_credit` flag are exposed as attributes.
 * **Tariff** — the current metered-household charges for the Thames Water region:
-  * **Unit Rate** (`GBP/L`) — combined clean water + wastewater volumetric rate, per litre. Because it is denominated in litres it can be attached directly to the Energy dashboard water source as the price entity.
+  * **Unit Rate** (`GBP/L`) — combined clean water + wastewater volumetric rate, per litre.
   * **Standing Charge** (`GBP/day`) — combined water + wastewater fixed charge per day.
   * **Volumetric Rate** (`GBP/m³`) — the combined rate per cubic metre.
   * Individual **Clean Water Rate**, **Wastewater Rate**, **Water Fixed Charge** and **Wastewater Fixed Charge** sensors (disabled by default; enable them for a full bill breakdown).
@@ -26,7 +26,17 @@ The integration exposes the following entities:
 
 ### Water cost in the Energy dashboard
 
-Attach the **Unit Rate** sensor as the price for your water source: in **Settings → Dashboards → Energy → Water consumption**, edit the source and choose *Use an entity tracking the total costs*/*Use a price entity* and select `sensor.thames_water_unit_rate`. (The standing charge is a flat daily amount and is not part of the volumetric price.)
+**A price entity cannot be attached to this integration's water source.** The
+Energy dashboard builds its cost sensor only for a source whose statistic is an
+entity ID, and this integration writes an external statistic
+(`thames_water:thameswater_consumption`). The colon makes it not an entity ID,
+so the dashboard skips cost tracking for it silently — no error and no log line.
+
+The **Unit Rate** sensor is a figure to read, then, rather than something to
+attach. Two further mismatches, if you are tempted: the price entity is read as
+a price per cubic metre, while Unit Rate is denominated per litre, and the
+standing charge is a flat daily amount that is not part of a volumetric price
+at all.
 
 ## Installation
 
