@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from thameswaterapi import Line
+from homeassistant.components.recorder.models import StatisticData
+from thameswaterapi import Line, Tariff
 
 from custom_components.thames_water.coordinator import (
     days_in_range,
     generate_daily_statistics,
     generate_hourly_statistics,
+    price_readings,
     wants_hourly,
 )
 
@@ -144,3 +146,67 @@ class TestFetchPlanning:
 
     def test_days_in_range_of_one_day(self) -> None:
         assert days_in_range(date(2026, 3, 1), date(2026, 3, 1)) == [date(2026, 3, 1)]
+
+
+TARIFF = Tariff(
+    clean_water_rate_per_m3=2.0,
+    wastewater_rate_per_m3=1.0,
+    water_fixed_per_year=100.0,
+    wastewater_fixed_per_year=200.0,
+    effective_date=date(2026, 4, 1),
+)
+
+
+def _reading(day: date, usage: int) -> StatisticData:
+    return StatisticData(
+        start=datetime.combine(day, datetime.min.time(), tzinfo=LONDON_TZ),
+        state=usage,
+        sum=0,
+    )
+
+
+class TestPriceReadings:
+    def test_cost_accumulates_across_readings(self) -> None:
+        rows, unpriced = price_readings(
+            [_reading(date(2026, 4, 1), 1000), _reading(date(2026, 4, 2), 500)],
+            TARIFF,
+            None,
+            0.0,
+        )
+        assert unpriced == 0
+        # 3.0 GBP/m3 is 0.003 GBP/L.
+        assert [row["state"] for row in rows] == [3.0, 1.5]
+        assert [row["sum"] for row in rows] == [3.0, 4.5]
+
+    def test_continues_from_the_running_total(self) -> None:
+        rows, _ = price_readings([_reading(date(2026, 4, 2), 1000)], TARIFF, None, 10.0)
+        assert rows[0]["sum"] == 13.0
+
+    def test_readings_already_priced_are_not_priced_again(self) -> None:
+        # The day holding the watermark is re-requested every cycle; pricing
+        # its readings twice would double the cost.
+        priced_through = datetime.combine(
+            date(2026, 4, 1), datetime.min.time(), tzinfo=LONDON_TZ
+        )
+        rows, _ = price_readings(
+            [_reading(date(2026, 4, 1), 1000), _reading(date(2026, 4, 2), 1000)],
+            TARIFF,
+            priced_through,
+            3.0,
+        )
+        assert len(rows) == 1
+        assert rows[0]["start"].date() == date(2026, 4, 2)
+        assert rows[0]["sum"] == 6.0
+
+    def test_readings_from_before_the_rate_took_effect_are_left_unpriced(self) -> None:
+        rows, unpriced = price_readings(
+            [_reading(date(2026, 3, 31), 1000), _reading(date(2026, 4, 1), 1000)],
+            TARIFF,
+            None,
+            0.0,
+        )
+        assert unpriced == 1
+        assert [row["start"].date() for row in rows] == [date(2026, 4, 1)]
+
+    def test_no_readings(self) -> None:
+        assert price_readings([], TARIFF, None, 0.0) == ([], 0)

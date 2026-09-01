@@ -14,7 +14,7 @@ It uses the [thameswaterapi](https://github.com/jelmer/thameswaterapi) Python pa
 
 The integration exposes the following entities:
 
-* **Water consumption** — the latest hourly meter read in litres, with both hourly and daily external statistics injected for use in the Energy dashboard.
+* **Water consumption** — the latest meter read in litres, with hourly and daily external statistics injected for use in the Energy dashboard, and a cost statistic in GBP alongside them.
 * **Outstanding balance** — the amount currently due on your Thames Water account, in GBP. The current balance and an `is_in_credit` flag are exposed as attributes.
 * **Tariff** — the current metered-household charges for the Thames Water region:
   * **Unit Rate** (`GBP/L`) — combined clean water + wastewater volumetric rate, per litre.
@@ -26,17 +26,31 @@ The integration exposes the following entities:
 
 ### Water cost in the Energy dashboard
 
-**A price entity cannot be attached to this integration's water source.** The
-Energy dashboard builds its cost sensor only for a source whose statistic is an
-entity ID, and this integration writes an external statistic
-(`thames_water:thameswater_consumption`). The colon makes it not an entity ID,
-so the dashboard skips cost tracking for it silently — no error and no log line.
+The integration writes a cost statistic, `thames_water:thameswater_consumption_cost`,
+in GBP, alongside the consumption one. In **Settings → Dashboards → Energy →
+Water consumption**, edit the source and choose *Use a statistic tracking the
+total costs*, then pick it.
 
-The **Unit Rate** sensor is a figure to read, then, rather than something to
-attach. Two further mismatches, if you are tempted: the price entity is read as
-a price per cubic metre, while Unit Rate is denominated per litre, and the
-standing charge is a flat daily amount that is not part of a volumetric price
-at all.
+**Do not attach a price entity instead.** The Energy dashboard builds its own
+cost sensor only for a source whose statistic is an entity ID, and this
+integration writes an external statistic, whose colon fails that check. A price
+entity attached to it is ignored silently — no error and no log line. The
+**Unit Rate** sensor is a figure to read, then, rather than something to attach;
+it is also denominated per litre where a price entity is read as a price per
+cubic metre.
+
+Two things to know about the cost figures:
+
+* Each reading is priced at the rate in force **on its own date**, using the
+  effective date the tariff page states. Readings arrive around three days
+  late, so without that a window spanning a price change would take whichever
+  rate happened to be scraped that run.
+* Only the current rate is published, so readings from **before** that rate
+  took effect are left unpriced rather than valued at a rate that was not
+  theirs. Correcting a rate later does not reprice readings already written.
+
+The standing charge is a flat daily amount, not part of a volumetric price, and
+is not included in the cost statistic.
 
 ## Installation
 
@@ -70,9 +84,11 @@ Then, add the integration:
 
 ## Energy Management
 
-The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**.
+The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**, with **thames_water:thameswater_consumption_cost** as the cost statistic.
 
-It will attempt to fetch the latest data at 00:00 and 12:00 every day.
+Data is fetched every 12 hours by default, and each refresh asks only for the
+days missing since the last one — so an instance that was switched off for a
+while catches up rather than losing those days.
 
 [![Open your Home Assistant instance and show your Energy configuration panel.](https://my.home-assistant.io/badges/config_energy.svg)](https://my.home-assistant.io/redirect/config_energy/)
 

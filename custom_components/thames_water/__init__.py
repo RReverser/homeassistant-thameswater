@@ -21,13 +21,15 @@ PLATFORMS = [Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ThamesWaterConfigEntry) -> bool:
     """Set up Thames Water from a config entry."""
-    coordinator = ThamesWaterCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
-
     # The tariff is a public page needing no credentials, so a failure to
-    # scrape it must not take consumption and balance down with it.
+    # scrape it must not take consumption and balance down with it. It is
+    # fetched first because the consumption coordinator prices its readings
+    # with it.
     tariff_coordinator = ThamesWaterTariffCoordinator(hass, entry)
     await tariff_coordinator.async_refresh()
+
+    coordinator = ThamesWaterCoordinator(hass, entry, tariff_coordinator)
+    await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = ThamesWaterRuntimeData(
         coordinator=coordinator,

@@ -49,6 +49,7 @@ LONDON_TZ = ZoneInfo("Europe/London")
 HOURLY_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_hourly"
 DAILY_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_daily"
 CONSUMPTION_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption"
+COST_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_cost"
 
 # The charges are a published annual scheme, but a longer cache would hide a
 # break in the page parser for up to a year, and they are not guaranteed to
@@ -137,6 +138,41 @@ def generate_daily_statistics(lines: list[Line]) -> list[StatisticData]:
     ]
 
 
+def price_readings(
+    consumption: list[StatisticData],
+    tariff: Tariff,
+    priced_through: datetime | None,
+    running_total: float,
+) -> tuple[list[StatisticData], int]:
+    """Price each reading, returning the cost rows and how many were skipped.
+
+    A reading already priced is never priced again, because cost accumulates
+    while a consumption sum is the meter's own odometer. A reading from
+    before the tariff took effect is left unpriced rather than valued at a
+    rate that was not in force for it; only the current rate is published.
+    """
+    rows: list[StatisticData] = []
+    unpriced = 0
+
+    for reading in consumption:
+        if priced_through is not None and reading["start"] <= priced_through:
+            continue
+        if reading["start"].astimezone(LONDON_TZ).date() < tariff.effective_date:
+            unpriced += 1
+            continue
+        cost = reading["state"] * tariff.unit_rate_per_litre
+        running_total += cost
+        rows.append(
+            StatisticData(
+                start=reading["start"],
+                state=round(cost, 4),
+                sum=round(running_total, 4),
+            )
+        )
+
+    return rows, unpriced
+
+
 def _statistic_metadata(statistic_id: str, name: str) -> StatisticMetaData:
     return StatisticMetaData(
         has_mean=False,
@@ -156,7 +192,10 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
     config_entry: ThamesWaterConfigEntry
 
     def __init__(
-        self, hass: HomeAssistant, config_entry: ThamesWaterConfigEntry
+        self,
+        hass: HomeAssistant,
+        config_entry: ThamesWaterConfigEntry,
+        tariff_coordinator: ThamesWaterTariffCoordinator,
     ) -> None:
         """Initialize the consumption and account coordinator."""
         super().__init__(
@@ -179,6 +218,7 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             account_number=int(config_entry.data["account_number"]),
         )
         self._meter_id = config_entry.data["meter_id"]
+        self._tariff_coordinator = tariff_coordinator
         self._consecutive_failures = 0
 
     async def _async_update_data(self) -> ThamesWaterData:
@@ -203,9 +243,16 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             ) from err
 
         self._consecutive_failures = 0
+        consumption = self._write_statistics(readings)
+        await self._async_write_cost_statistics(consumption)
+
         return ThamesWaterData(
             account=readings.account,
-            latest_read=self._write_statistics(readings),
+            latest_read=(
+                consumption[-1]["sum"]
+                if consumption
+                else (self.data.latest_read if self.data else None)
+            ),
         )
 
     async def _async_start_day(self) -> date:
@@ -252,8 +299,8 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
 
         return readings
 
-    def _write_statistics(self, readings: ThamesWaterReadings) -> float | None:
-        """Write the external statistics and return the newest meter read.
+    def _write_statistics(self, readings: ThamesWaterReadings) -> list[StatisticData]:
+        """Write the consumption statistics and return the rows written.
 
         A well-formed response with no lines is a valid answer meaning there
         is no data for that range: nothing is written and the watermark stays
@@ -265,17 +312,91 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         daily = generate_daily_statistics(readings.daily)
 
         if hourly:
-            self._inject(HOURLY_STATISTIC_ID, "Thames Water Consumption (Hourly)", hourly)
+            self._inject(
+                HOURLY_STATISTIC_ID, "Thames Water Consumption (Hourly)", hourly
+            )
         if daily:
             self._inject(DAILY_STATISTIC_ID, "Thames Water Consumption (Daily)", daily)
 
-        combined = hourly or daily
+        combined = sorted(hourly or daily, key=lambda row: row["start"])
         if not combined:
             _LOGGER.debug("Thames Water published no readings for this window")
-            return self.data.latest_read if self.data else None
+            return []
 
         self._inject(CONSUMPTION_STATISTIC_ID, "Thames Water Consumption", combined)
-        return combined[-1]["sum"]
+        return combined
+
+    async def _async_write_cost_statistics(
+        self, consumption: list[StatisticData]
+    ) -> None:
+        """Write the money each of those readings cost.
+
+        The Energy dashboard builds no cost sensor for an external statistic,
+        so the cost is written as an external statistic of its own for the
+        water source to point at.
+
+        Each row is priced at the rate in force on the row's own date.
+        Readings arrive days late, so a window spanning a price change would
+        otherwise take whichever rate the run happened to scrape. Only the
+        current rate is published, so readings from before it took effect are
+        left unpriced rather than valued at a rate that was not theirs.
+        """
+        tariff = self._tariff_coordinator.data
+        if tariff is None or not consumption:
+            return
+
+        priced_through, running_total = await self._async_cost_watermark()
+        rows, unpriced = price_readings(
+            consumption, tariff, priced_through, running_total
+        )
+
+        if unpriced:
+            _LOGGER.debug(
+                "Left %d readings from before %s unpriced: only the current "
+                "rate is published",
+                unpriced,
+                tariff.effective_date,
+            )
+        if not rows:
+            return
+
+        _LOGGER.debug(
+            "Injecting %d cost statistics for %s (%s to %s)",
+            len(rows),
+            COST_STATISTIC_ID,
+            rows[0]["start"],
+            rows[-1]["start"],
+        )
+        async_add_external_statistics(
+            self.hass,
+            StatisticMetaData(
+                has_mean=False,
+                has_sum=True,
+                mean_type=StatisticMeanType.NONE,
+                name="Thames Water Consumption Cost",
+                source=DOMAIN,
+                statistic_id=COST_STATISTIC_ID,
+                unit_class=None,
+                unit_of_measurement="GBP",
+            ),
+            rows,
+        )
+
+    async def _async_cost_watermark(self) -> tuple[datetime | None, float]:
+        """Return how far cost has been priced, and the total to carry on from.
+
+        Cost accumulates, unlike consumption, whose sum is the meter's own
+        odometer. A reading already priced is therefore never priced again,
+        even when the day it falls in is re-requested.
+        """
+        last_stat = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, COST_STATISTIC_ID, True, {"sum"}
+        )
+        if not last_stat:
+            return None, 0.0
+
+        row = last_stat[COST_STATISTIC_ID][0]
+        return dt_util.utc_from_timestamp(row["start"]), row.get("sum") or 0.0
 
     def _inject(
         self, statistic_id: str, name: str, statistics: list[StatisticData]
