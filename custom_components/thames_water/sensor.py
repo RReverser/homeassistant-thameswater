@@ -92,13 +92,19 @@ async def async_setup_entry(
     update_interval_hours = entry.data.get(
         "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
     )
-    async_track_time_interval(
-        hass, sensor.async_update_callback, timedelta(hours=update_interval_hours)
+    # The callbacks close over the sensors, so an unregistered timer keeps them
+    # alive and polling; every reload would stack another one.
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, sensor.async_update_callback, timedelta(hours=update_interval_hours)
+        )
     )
-    async_track_time_interval(
-        hass,
-        balance_sensor.async_update_callback,
-        timedelta(hours=update_interval_hours),
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            balance_sensor.async_update_callback,
+            timedelta(hours=update_interval_hours),
+        )
     )
 
     # Tariff sensors. These scrape a public, region-wide page and need no
