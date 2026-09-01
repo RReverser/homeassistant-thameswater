@@ -13,7 +13,7 @@
 	"iot_class": "cloud_polling",
 	"issue_tracker": "https://github.com/jelmer/HA-Thames-Water/issues",
 	"requirements": [
-		"thameswaterapi @ git+https://github.com/RReverser/thameswaterapi@47aae17c3a2dfec856a801d5949d9a7f92ebfcf1"
+		"thameswaterapi @ git+https://github.com/RReverser/thameswaterapi@main"
 	],
 	"version": "1.2.2"
 }
