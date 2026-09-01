@@ -14,7 +14,7 @@ It uses the [thameswaterapi](https://github.com/jelmer/thameswaterapi) Python pa
 
 The integration exposes the following entities:
 
-* **Water consumption** — the latest hourly meter read in litres, with both hourly and daily external statistics injected for use in the Energy dashboard.
+* **Water consumption** — the latest meter read in litres, with hourly external statistics injected for use in the Energy dashboard.
 * **Outstanding balance** — the amount currently due on your Thames Water account, in GBP. The current balance and an `is_in_credit` flag are exposed as attributes.
 * **Tariff** — the current metered-household charges for the Thames Water region:
   * **Unit Rate** (`GBP/L`) — combined clean water + wastewater volumetric rate, per litre. Because it is denominated in litres it can be attached directly to the Energy dashboard water source as the price entity.
@@ -22,7 +22,7 @@ The integration exposes the following entities:
   * **Volumetric Rate** (`GBP/m³`) — the combined rate per cubic metre.
   * Individual **Clean Water Rate**, **Wastewater Rate**, **Water Fixed Charge** and **Wastewater Fixed Charge** sensors (disabled by default; enable them for a full bill breakdown).
 
-  Thames Water has no tariff API — metered charges are a fixed annual "Scheme of Charges", published per region rather than per account, so the same figures apply to every customer. This integration reads them from Thames Water's public [metered customers](https://www.thameswater.co.uk/help/account-and-billing/understand-your-bill/metered-customers) help page (no credentials required) and refreshes daily; they normally only change on 1 April. The fixed charges use the standard rate (not the surface-water-drainage rebate rate). If the page layout ever changes the tariff sensors become unavailable but consumption and balance are unaffected.
+  Thames Water has no tariff API — metered charges are a fixed annual "Scheme of Charges", published per region rather than per account, so the same figures apply to every customer. This integration reads them from Thames Water's public [metered customers](https://www.thameswater.co.uk/help/account-and-billing/understand-your-bill/metered-customers) help page (no credentials required) and refreshes weekly; they normally only change on 1 April. That page is a customer-facing summary rather than the Scheme of Charges itself, so it may not reflect banding or variation by area, and the fixed charges it lists are the standard rate rather than the surface-water-drainage rebate rate. If the page layout ever changes the tariff sensors become unavailable but consumption and balance are unaffected.
 
 ### Water cost in the Energy dashboard
 
@@ -62,7 +62,13 @@ Then, add the integration:
 
 The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**.
 
-It will attempt to fetch the latest data at 00:00 and 12:00 every day.
+Data is fetched every 12 hours by default, in a single hourly request covering
+everything missing since the last one, so an instance that was switched off for
+a while catches up in one go rather than losing those days.
+
+Readings run about three days behind. A response ending today is truncated at a
+whole-day boundary rather than padded, so the days not yet published are simply
+absent and the next refresh asks for them again.
 
 [![Open your Home Assistant instance and show your Energy configuration panel.](https://my.home-assistant.io/badges/config_energy.svg)](https://my.home-assistant.io/redirect/config_energy/)
 
