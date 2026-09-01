@@ -1,5 +1,8 @@
 """Config flow for Thames Water integration."""
 
+from collections.abc import Mapping
+from typing import Any
+
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -49,6 +52,42 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=data_schema, errors=errors
         )
 
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]):
+        """Handle a password rejected by Thames Water."""
+        self._credentials = dict(entry_data)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """Collect a new password for the entry being reauthenticated."""
+        errors = {}
+        if user_input is not None:
+            try:
+                await self.hass.async_add_executor_job(
+                    self._authenticate,
+                    self._credentials["username"],
+                    user_input["password"],
+                )
+            except AuthenticationError:
+                errors["base"] = "invalid_auth"
+            except Exception:
+                errors["base"] = "cannot_connect"
+            else:
+                entry = self.hass.config_entries.async_get_entry(
+                    self.context["entry_id"]
+                )
+                assert entry is not None
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={**entry.data, "password": user_input["password"]},
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required("password"): str}),
+            description_placeholders={"username": self._credentials["username"]},
+            errors=errors,
+        )
+
     async def async_step_account(self, user_input=None):
         """Handle the account selection step."""
         assert self._client is not None
@@ -71,9 +110,7 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
 
-        return self.async_show_form(
-            step_id="account", data_schema=data_schema
-        )
+        return self.async_show_form(step_id="account", data_schema=data_schema)
 
     async def async_step_meter(self, user_input=None):
         """Handle the meter selection step."""
