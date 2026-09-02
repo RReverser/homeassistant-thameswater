@@ -11,7 +11,13 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.thames_water.const import DOMAIN
+from custom_components.thames_water.const import (
+    ATTR_START_DATE,
+    CONF_COOKIES,
+    CONF_REFRESH_TOKEN,
+    DOMAIN,
+    SERVICE_IMPORT_HISTORY,
+)
 from custom_components.thames_water.coordinator import (
     INITIAL_HISTORY,
     LONDON_TZ,
@@ -19,7 +25,14 @@ from custom_components.thames_water.coordinator import (
     cost_statistic_id,
 )
 
-from .conftest import ACCOUNTS, METERS, PUBLICATION_LAG_DAYS, make_meter_usage
+from .conftest import (
+    ACCOUNTS,
+    COOKIES,
+    METERS,
+    PUBLICATION_LAG_DAYS,
+    REFRESH_TOKEN,
+    make_meter_usage,
+)
 
 FIRST_ACCOUNT, SECOND_ACCOUNT = ACCOUNTS
 FIRST_METER = METERS[FIRST_ACCOUNT][0]
@@ -198,6 +211,76 @@ async def test_a_meter_added_later_appears_without_reconfiguring(
         assert _state_of(hass, f"{new_meter}_meter_reading") is not None
     finally:
         METERS[FIRST_ACCOUNT].remove(new_meter)
+
+
+async def test_the_session_is_persisted_for_the_next_start(
+    integration, hass: HomeAssistant, config_entry, client, statistics
+) -> None:
+    # The refresh token rotates on every use, so what the entry holds has to
+    # be what the last grant returned, or the next start costs a password.
+    await _setup(hass, config_entry)
+
+    assert config_entry.data[CONF_REFRESH_TOKEN] == REFRESH_TOKEN
+    assert config_entry.data[CONF_COOKIES] == COOKIES
+
+
+async def test_a_stored_session_is_handed_back_to_the_client(
+    integration, hass: HomeAssistant, config_entry, client, statistics
+) -> None:
+    # What was persisted last time is what the client is built with, so the
+    # ladder can try the refresh token before the password.
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={
+            **config_entry.data,
+            CONF_REFRESH_TOKEN: "stored-token",
+            CONF_COOKIES: COOKIES,
+        },
+    )
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    built_with = client._mock_new_parent.call_args.kwargs
+    assert built_with[CONF_REFRESH_TOKEN] == "stored-token"
+    assert built_with[CONF_COOKIES] == COOKIES
+
+
+async def test_removing_the_entry_ends_the_session(
+    integration, hass: HomeAssistant, config_entry, client, statistics
+) -> None:
+    await _setup(hass, config_entry)
+
+    await hass.config_entries.async_remove(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert client.logout.called
+
+
+async def test_import_history_fetches_the_meter_it_targets(
+    integration, hass: HomeAssistant, config_entry, client, statistics
+) -> None:
+    # Depth is one request whatever the width, but the watermark only fills
+    # forward, so a deeper history has to be askable for after setup.
+    await _setup(hass, config_entry)
+    client.get_meter_usage.reset_mock()
+
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "sensor", DOMAIN, f"{FIRST_METER}_meter_reading"
+    )
+    start = date.today() - timedelta(days=180)
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_IMPORT_HISTORY,
+        {"entity_id": entity_id, ATTR_START_DATE: start},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Only the targeted meter, and the whole range in one request.
+    client.get_meter_usage.assert_called_once()
+    assert client.get_meter_usage.call_args.args[0] == FIRST_METER
+    assert client.get_meter_usage.call_args.args[1] == start
 
 
 async def test_a_rejected_password_starts_reauth(

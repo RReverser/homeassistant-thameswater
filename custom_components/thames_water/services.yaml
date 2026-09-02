@@ -1,0 +1,11 @@
+import_history:
+  target:
+    entity:
+      integration: thames_water
+      domain: sensor
+  fields:
+    start_date:
+      required: true
+      example: "2026-02-01"
+      selector:
+        date:

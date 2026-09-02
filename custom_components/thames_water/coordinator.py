@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 import logging
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from thameswaterapi import (
@@ -32,13 +34,13 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util, slugify
 from homeassistant.util.unit_conversion import VolumeConverter
 
-from .const import DOMAIN
+from .const import CONF_COOKIES, CONF_REFRESH_TOKEN, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -195,6 +197,8 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         self._client = ThamesWater(
             email=config_entry.data[CONF_USERNAME],
             password=config_entry.data[CONF_PASSWORD],
+            refresh_token=config_entry.data.get(CONF_REFRESH_TOKEN),
+            cookies=config_entry.data.get(CONF_COOKIES),
         )
         self._tariff_coordinator = tariff_coordinator
         self._consecutive_failures = 0
@@ -204,6 +208,7 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         start_days = await self._async_start_days()
 
         try:
+            await self._async_authenticate()
             accounts, readings = await self.hass.async_add_executor_job(
                 self._fetch, start_days
             )
@@ -229,18 +234,25 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             )
         return data
 
-    async def async_import_history(self, start_day: date) -> None:
-        """Import every meter's readings from ``start_day`` onwards.
+    async def async_import_history(self, meter_id: str, start_day: date) -> None:
+        """Import one meter's readings from ``start_day`` onwards.
 
-        Re-importable: a consumption row carries the meter odometer, so
-        writing one again overwrites it with the same value.
+        Depth is nearly free — the whole range is one request, whatever its
+        width — but it is not re-choosable later, because the watermark only
+        fills forward. Hence an action rather than a setup question.
+
+        Re-running it is safe: a consumption row carries the meter odometer,
+        so writing one again overwrites it with the same value.
         """
-        start_days: dict[str, date] = {}
-        _, readings = await self.hass.async_add_executor_job(
-            self._fetch, start_days, start_day
+        meter = self.data.meters[meter_id]
+
+        await self._async_authenticate()
+        readings = await self.hass.async_add_executor_job(
+            self._fetch_meter, meter.account_number, meter_id, start_day
         )
-        for meter_readings in readings:
-            await self._async_record(meter_readings)
+
+        self.data.meters[meter_id] = await self._async_record(readings)
+        self.async_update_listeners()
 
     async def _async_record(self, readings: MeterReadings) -> MeterData:
         """Write one meter's statistics and summarise them for its entities."""
@@ -258,6 +270,31 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             account_number=readings.account_number,
             latest_read=consumption[-1]["sum"],
             last_reading_at=consumption[-1]["start"],
+        )
+
+    async def _async_authenticate(self) -> None:
+        """Establish the session and save what it hands back.
+
+        The refresh token rotates on every use, so the new one is stored
+        before the data calls: the old one is spent the moment the grant
+        succeeds, and a crash in between would cost a password login on the
+        next start.
+        """
+        await self.hass.async_add_executor_job(self._client.authenticate)
+        self._persist_session()
+
+    @callback
+    def _persist_session(self) -> None:
+        """Keep the rotated token and cookies in the config entry."""
+        session = {
+            CONF_REFRESH_TOKEN: self._client.refresh_token,
+            CONF_COOKIES: self._client.cookies,
+        }
+        if all(self.config_entry.data.get(k) == v for k, v in session.items()):
+            return
+
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data={**self.config_entry.data, **session}
         )
 
     async def _async_start_days(self) -> dict[str, date]:
@@ -285,19 +322,14 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         return start_days
 
     def _fetch(
-        self,
-        start_days: dict[str, date],
-        default_start: date | None = None,
+        self, start_days: dict[str, date]
     ) -> tuple[dict[int, Account], list[MeterReadings]]:
         """Fetch every account and meter (blocking, run in an executor).
 
         The session is established up front and the data calls are made
         against it. Nothing here re-authenticates in response to a failure.
         """
-        self._client.authenticate()
-
-        today = dt_util.now(LONDON_TZ).date()
-        fallback = default_start or today - INITIAL_HISTORY
+        fallback = dt_util.now(LONDON_TZ).date() - INITIAL_HISTORY
 
         accounts: dict[int, Account] = {}
         readings: list[MeterReadings] = []
@@ -309,30 +341,42 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             self._client.account_number = account_number
             accounts[account_number] = self._client.get_account()
 
-            for meter_id in self._client.get_meter_numbers():
-                start_day = start_days.get(meter_id, fallback)
-                _LOGGER.debug(
-                    "Asking for hourly readings for meter %s from %s to %s",
-                    meter_id,
-                    start_day,
-                    today,
+            readings.extend(
+                self._fetch_meter(
+                    account_number, meter_id, start_days.get(meter_id, fallback)
                 )
-                # One request, whatever the window is: a response ending today
-                # is truncated on a whole-day boundary rather than padded, so
-                # the days not yet published are simply absent from it.
-                usage = self._client.get_meter_usage(
-                    meter_id, start_day, today, granularity="H"
-                )
-                readings.append(
-                    MeterReadings(
-                        meter_id=meter_id,
-                        account_number=account_number,
-                        start_day=start_day,
-                        lines=usage.Lines,
-                    )
-                )
+                for meter_id in self._client.get_meter_numbers()
+            )
 
         return accounts, readings
+
+    def _fetch_meter(
+        self, account_number: int, meter_id: str, start_day: date
+    ) -> MeterReadings:
+        """Fetch one meter's window (blocking, run in an executor)."""
+        today = dt_util.now(LONDON_TZ).date()
+        if self._client.account_number != account_number:
+            # Assigning re-scopes the session to that contract account.
+            self._client.account_number = account_number
+
+        _LOGGER.debug(
+            "Asking for hourly readings for meter %s from %s to %s",
+            meter_id,
+            start_day,
+            today,
+        )
+        # One request, whatever the window is: a response ending today is
+        # truncated on a whole-day boundary rather than padded, so the days
+        # not yet published are simply absent from it.
+        usage = self._client.get_meter_usage(
+            meter_id, start_day, today, granularity="H"
+        )
+        return MeterReadings(
+            meter_id=meter_id,
+            account_number=account_number,
+            start_day=start_day,
+            lines=usage.Lines,
+        )
 
     def _write_statistics(self, readings: MeterReadings) -> list[StatisticData]:
         """Write one meter's consumption statistics and return the rows.
@@ -447,6 +491,23 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
 
         row = last_stat[statistic_id][0]
         return dt_util.utc_from_timestamp(row["start"]), row.get("sum") or 0.0
+
+
+def end_session(entry_data: Mapping[str, Any]) -> None:
+    """Sign out of Thames Water (blocking, run in an executor).
+
+    Nothing reads the result and no decision depends on it: the session
+    would expire on its own. It is called when an entry is removed so the
+    credentials stored there stop having a live session behind them.
+    """
+    client = ThamesWater(
+        email=entry_data[CONF_USERNAME],
+        password=entry_data[CONF_PASSWORD],
+        refresh_token=entry_data.get(CONF_REFRESH_TOKEN),
+        cookies=entry_data.get(CONF_COOKIES),
+    )
+    client.authenticate()
+    client.logout()
 
 
 class ThamesWaterTariffCoordinator(DataUpdateCoordinator[Tariff]):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
@@ -12,7 +14,10 @@ from .coordinator import (
     ThamesWaterCoordinator,
     ThamesWaterRuntimeData,
     ThamesWaterTariffCoordinator,
+    end_session,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -45,3 +50,14 @@ async def async_unload_entry(
 ) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(
+    hass: HomeAssistant, entry: ThamesWaterConfigEntry
+) -> None:
+    """End the Thames Water session when the entry is deleted."""
+    try:
+        await hass.async_add_executor_job(end_session, entry.data)
+    except Exception as err:  # noqa: BLE001
+        # Nothing depends on the result: the session expires by itself.
+        _LOGGER.debug("Signing out of Thames Water failed: %s", err)

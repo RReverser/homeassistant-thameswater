@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import logging
+
+import voluptuous as vol
 
 from thameswaterapi import Account, Tariff
 
@@ -19,10 +21,11 @@ from homeassistant.components.sensor import (
 from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import ATTR_START_DATE, DOMAIN, SERVICE_IMPORT_HISTORY
 from .coordinator import (
     MeterData,
     ThamesWaterConfigEntry,
@@ -232,6 +235,12 @@ async def async_setup_entry(
     _add_new_entities()
     entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
 
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        SERVICE_IMPORT_HISTORY,
+        {vol.Required(ATTR_START_DATE): cv.date},
+        "async_import_history",
+    )
+
 
 class ThamesWaterMeterSensor(CoordinatorEntity[ThamesWaterCoordinator], SensorEntity):
     """A sensor derived from one meter's readings."""
@@ -266,6 +275,10 @@ class ThamesWaterMeterSensor(CoordinatorEntity[ThamesWaterCoordinator], SensorEn
         """Return the value derived from this meter's latest readings."""
         return self.entity_description.value_fn(self._meter)
 
+    async def async_import_history(self, start_date: date) -> None:
+        """Import this meter's readings from ``start_date`` onwards."""
+        await self.coordinator.async_import_history(self._meter_id, start_date)
+
 
 class ThamesWaterAccountSensor(CoordinatorEntity[ThamesWaterCoordinator], SensorEntity):
     """A sensor derived from one contract account."""
@@ -293,7 +306,9 @@ class ThamesWaterAccountSensor(CoordinatorEntity[ThamesWaterCoordinator], Sensor
     @property
     def available(self) -> bool:
         """Whether the account was still on the login at the last refresh."""
-        return super().available and self._account_number in self.coordinator.data.accounts
+        return (
+            super().available and self._account_number in self.coordinator.data.accounts
+        )
 
     @property
     def native_value(self) -> float | None:

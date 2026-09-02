@@ -29,6 +29,16 @@ METER_ID = "311228415"
 # Readings are published about three days in arrears.
 PUBLICATION_LAG_DAYS = 3
 
+REFRESH_TOKEN = "rotated-refresh-token"
+COOKIES = [
+    {
+        "name": "b2cAuthenticated",
+        "value": "true",
+        "domain": "myaccount.thameswater.co.uk",
+        "path": "/",
+    }
+]
+
 TARIFF = Tariff(
     clean_water_rate_per_m3=2.0,
     wastewater_rate_per_m3=1.0,
@@ -131,6 +141,9 @@ def client() -> Generator[MagicMock]:
     ):
         client = client_class.return_value
         client.account_number = next(iter(ACCOUNTS))
+        # Session state the entry persists; the grant rotates the token.
+        client.refresh_token = REFRESH_TOKEN
+        client.cookies = COOKIES
 
         client.get_account_numbers.return_value = list(ACCOUNTS)
         client.get_account.side_effect = lambda: make_account(client.account_number)
