@@ -1,19 +1,19 @@
 {
-	"domain": "thames_water",
-	"name": "Thames Water",
-	"codeowners": [
-		"@jelmer"
-	],
-	"config_flow": true,
-	"dependencies": [
-		"recorder"
-	],
-	"documentation": "https://github.com/jelmer/HA-Thames-Water",
-	"integration_type": "hub",
-	"iot_class": "cloud_polling",
-	"issue_tracker": "https://github.com/jelmer/HA-Thames-Water/issues",
-	"requirements": [
-		"thameswaterapi @ git+https://github.com/RReverser/thameswaterapi@main"
-	],
-	"version": "1.2.2"
+  "domain": "thames_water",
+  "name": "Thames Water",
+  "codeowners": [
+    "@jelmer"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/RReverser/homeassistant-thameswater",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/RReverser/homeassistant-thameswater/issues",
+  "requirements": [
+    "thameswaterapi @ git+https://github.com/RReverser/thameswaterapi@main"
+  ],
+  "version": "2.0.0"
 }
