@@ -38,7 +38,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
 
-from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +54,13 @@ COST_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_cost"
 # change only in April: water price controls are subject to CMA
 # redetermination. One unauthenticated GET on a public page either way.
 TARIFF_SCAN_INTERVAL = timedelta(days=7)
+
+# Readings are published daily and arrive about three days late, so nothing
+# depends on this value. Under 24 hours the refresh token never expires
+# between cycles, which is what keeps the password out of the steady state.
+# A user wanting another cadence turns polling off in the entry's system
+# options and calls homeassistant.update_entity from an automation.
+UPDATE_INTERVAL = timedelta(hours=12)
 
 # Backoff for a response that did not parse, doubling from a minute.
 MIN_BACKOFF = timedelta(seconds=60)
@@ -178,11 +185,7 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             _LOGGER,
             config_entry=config_entry,
             name="Thames Water",
-            update_interval=timedelta(
-                hours=config_entry.data.get(
-                    "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
-                )
-            ),
+            update_interval=UPDATE_INTERVAL,
         )
         # One client for the entry's lifetime: it holds the rotating refresh
         # token, so a cycle inside the token's 24-hour life re-authenticates

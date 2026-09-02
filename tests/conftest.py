@@ -91,7 +91,6 @@ def config_entry() -> MockConfigEntry:
             "password": "hunter2",
             "account_number": ACCOUNT_NUMBER,
             "meter_id": METER_ID,
-            "update_interval_hours": 12,
         },
     )
 

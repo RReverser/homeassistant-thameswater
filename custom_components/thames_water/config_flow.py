@@ -7,7 +7,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 
-from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
+from .const import DOMAIN
 from thameswaterapi import AuthenticationError, ThamesWater
 
 
@@ -124,11 +124,7 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             return self.async_create_entry(
                 title="Thames Water",
-                data={
-                    **self._credentials,
-                    "meter_id": user_input["meter_id"],
-                    "update_interval_hours": user_input["update_interval_hours"],
-                },
+                data={**self._credentials, "meter_id": user_input["meter_id"]},
             )
 
         meter_numbers = await self.hass.async_add_executor_job(
@@ -140,15 +136,7 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="meter", data_schema=vol.Schema({}), errors=errors
             )
 
-        data_schema = vol.Schema(
-            {
-                vol.Required("meter_id"): vol.In(meter_numbers),
-                vol.Required(
-                    "update_interval_hours",
-                    default=DEFAULT_UPDATE_INTERVAL_HOURS,
-                ): vol.All(int, vol.Range(min=1)),
-            }
-        )
+        data_schema = vol.Schema({vol.Required("meter_id"): vol.In(meter_numbers)})
 
         return self.async_show_form(
             step_id="meter", data_schema=data_schema, errors=errors
