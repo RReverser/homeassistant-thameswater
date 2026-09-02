@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thames Water",
+        "description": "Sign in with the details you use on the Thames Water website. Your accounts and meters are found automatically.",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "The email address you sign in to Thames Water with."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter your password",
+        "description": "Thames Water rejected the stored password for {username}.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Thames Water did not accept that email and password.",
+      "cannot_connect": "Could not reach Thames Water. Try again shortly."
+    },
+    "abort": {
+      "already_configured": "This Thames Water account is already set up.",
+      "reauth_successful": "Thames Water accepted the new password."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "meter_reading": {
+        "name": "Meter reading"
+      },
+      "last_reading": {
+        "name": "Last reading"
+      },
+      "outstanding_balance": {
+        "name": "Outstanding balance"
+      },
+      "unit_rate": {
+        "name": "Unit rate"
+      },
+      "standing_charge": {
+        "name": "Standing charge"
+      },
+      "volumetric_rate": {
+        "name": "Volumetric rate"
+      },
+      "clean_water_rate": {
+        "name": "Clean water rate"
+      },
+      "wastewater_rate": {
+        "name": "Wastewater rate"
+      },
+      "water_fixed_charge": {
+        "name": "Water fixed charge"
+      },
+      "wastewater_fixed_charge": {
+        "name": "Wastewater fixed charge"
+      }
+    }
+  },
+  "services": {
+    "import_history": {
+      "name": "Import history",
+      "description": "Fetches older readings and writes them into the consumption and cost statistics. Re-running it is safe: a reading already written is overwritten with the same value.",
+      "fields": {
+        "start_date": {
+          "name": "Start date",
+          "description": "The first day to import. Readings exist from before you moved in, so a start earlier than your move-in date imports the previous occupant's usage."
+        }
+      }
+    }
+  }
+}

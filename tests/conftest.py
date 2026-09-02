@@ -7,14 +7,24 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
-from thameswaterapi import Account, Line, MeterUsage, Tariff
+from thameswaterapi import Account, Address, Line, MeterUsage, Property, Tariff
+
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.thames_water.const import DOMAIN
 
-METER_ID = "311307160"
-ACCOUNT_NUMBER = "900000000000"
+USERNAME = "user@example.com"
+PASSWORD = "hunter2"
+
+# Two contract accounts, one meter each, as on the account under test.
+ACCOUNTS = {
+    900062968442: "1, Example Street, London, AB1 2CD",
+    900096294185: "2, Other Road, London, EF3 4GH",
+}
+METERS = {900062968442: ["311228415"], 900096294185: ["311307160"]}
+METER_ID = "311228415"
 
 # Readings are published about three days in arrears.
 PUBLICATION_LAG_DAYS = 3
@@ -27,12 +37,28 @@ TARIFF = Tariff(
     effective_date=date(2020, 1, 1),
 )
 
-ACCOUNT = Account(
-    contractAccountNumber=ACCOUNT_NUMBER,
-    paymentDueAmount=42.5,
-    currentBalance=-15.0,
-    isInCredit=True,
-)
+
+def make_account(account_number: int) -> Account:
+    """Build an account carrying the address its device is named after."""
+    return Account(
+        contractAccountNumber=str(account_number),
+        paymentDueAmount=42.5,
+        currentBalance=-15.0,
+        isInCredit=True,
+        property=Property(
+            propertyId="1",
+            meterType=2,
+            address=Address(
+                addressLine1="1",
+                addressLine2="Example Street",
+                town="London",
+                administrativeArea="",
+                country="Gb",
+                postcode="AB1 2CD",
+                fullAddress=ACCOUNTS[account_number],
+            ),
+        ),
+    )
 
 
 @pytest.fixture
@@ -82,22 +108,18 @@ def hourly_lines(days: int, read: float = 1000.0) -> list[Line]:
 
 @pytest.fixture
 def config_entry() -> MockConfigEntry:
-    """A configured Thames Water entry."""
+    """A configured Thames Water entry: credentials and nothing else."""
     return MockConfigEntry(
         domain=DOMAIN,
-        title="Thames Water",
-        data={
-            "username": "user@example.com",
-            "password": "hunter2",
-            "account_number": ACCOUNT_NUMBER,
-            "meter_id": METER_ID,
-        },
+        title=USERNAME,
+        unique_id=USERNAME,
+        data={CONF_USERNAME: USERNAME, CONF_PASSWORD: PASSWORD},
     )
 
 
 @pytest.fixture
 def client() -> Generator[MagicMock]:
-    """Patch the library client, answering with days up to the publication lag."""
+    """Patch the library client, serving two accounts of one meter each."""
     with (
         patch(
             "custom_components.thames_water.coordinator.ThamesWater", autospec=True
@@ -108,6 +130,11 @@ def client() -> Generator[MagicMock]:
         ),
     ):
         client = client_class.return_value
+        client.account_number = next(iter(ACCOUNTS))
+
+        client.get_account_numbers.return_value = list(ACCOUNTS)
+        client.get_account.side_effect = lambda: make_account(client.account_number)
+        client.get_meter_numbers.side_effect = lambda: METERS[client.account_number]
 
         def get_meter_usage(meter, start, end, granularity="H"):
             # The response is truncated on a whole-day boundary at the
@@ -116,7 +143,6 @@ def client() -> Generator[MagicMock]:
             return make_meter_usage(hourly_lines((published - start).days + 1))
 
         client.get_meter_usage.side_effect = get_meter_usage
-        client.get_account.return_value = ACCOUNT
         yield client
 
 

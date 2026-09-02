@@ -9,6 +9,8 @@ from homeassistant.components.recorder.models import StatisticData
 from thameswaterapi import Line, Tariff
 
 from custom_components.thames_water.coordinator import (
+    consumption_statistic_id,
+    cost_statistic_id,
     generate_hourly_statistics,
     price_readings,
 )
@@ -165,3 +167,17 @@ class TestPriceReadings:
 
     def test_no_readings(self) -> None:
         assert price_readings([], TARIFF, None, 0.0) == ([], 0)
+
+
+class TestStatisticIds:
+    def test_one_series_per_meter(self) -> None:
+        assert consumption_statistic_id("311228415") == (
+            "thames_water:311228415_consumption"
+        )
+        assert cost_statistic_id("311228415") == "thames_water:311228415_cost"
+
+    def test_a_serial_is_slugified(self) -> None:
+        # valid_statistic_id wants both halves to be slugs.
+        assert consumption_statistic_id("31-12/284 15") == (
+            "thames_water:31_12_284_15_consumption"
+        )
