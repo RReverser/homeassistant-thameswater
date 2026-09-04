@@ -5,9 +5,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from thameswaterapi import Line
+from homeassistant.components.recorder.models import StatisticData
+from thameswaterapi import Line, Tariff
 
-from custom_components.thames_water.coordinator import generate_hourly_statistics
+from custom_components.thames_water.coordinator import (
+    generate_hourly_statistics,
+    price_readings,
+)
 
 LONDON_TZ = ZoneInfo("Europe/London")
 
@@ -97,3 +101,93 @@ class TestGenerateHourlyStatistics:
             date(2024, 1, 1), [_make_line(10.0, 100.0, "0:00")]
         )
         assert stats[0]["start"].tzinfo is not None
+
+
+def _tariff(charging_year: int, clean: float, waste: float) -> Tariff:
+    return Tariff(
+        clean_water_rate_per_m3=clean,
+        wastewater_rate_per_m3=waste,
+        water_fixed_per_year=0.0,
+        wastewater_fixed_per_year=0.0,
+        charging_year=charging_year,
+    )
+
+
+def _reading(day: date, usage: int) -> StatisticData:
+    return StatisticData(
+        start=datetime.combine(day, datetime.min.time(), tzinfo=LONDON_TZ),
+        state=usage,
+        sum=0,
+    )
+
+
+# 2.0 + 1.0 GBP/m3 is 0.003 GBP/L; 3.0 + 1.0 is 0.004.
+CHARGES = {
+    date(2026, 3, 31): _tariff(2025, 2.0, 1.0),
+    date(2026, 4, 1): _tariff(2026, 3.0, 1.0),
+}
+
+
+class TestPriceReadings:
+    def test_each_reading_takes_the_rate_of_its_own_day(self) -> None:
+        # The point of the whole branch: a window spanning 1 April prices
+        # each side at the rate that was in force for it.
+        rows = price_readings(
+            [
+                _reading(date(2026, 3, 31), 1000),
+                _reading(date(2026, 4, 1), 1000),
+            ],
+            CHARGES,
+            None,
+            0.0,
+        )
+        assert [row["state"] for row in rows] == [3.0, 4.0]
+        assert [row["sum"] for row in rows] == [3.0, 7.0]
+
+    def test_cost_carries_on_from_the_running_total(self) -> None:
+        rows = price_readings([_reading(date(2026, 4, 1), 1000)], CHARGES, None, 10.0)
+        assert rows[0]["sum"] == 14.0
+
+    def test_readings_already_priced_are_not_priced_again(self) -> None:
+        # The day holding the watermark is re-requested every cycle.
+        priced_through = datetime.combine(
+            date(2026, 3, 31), datetime.min.time(), tzinfo=LONDON_TZ
+        )
+        rows = price_readings(
+            [
+                _reading(date(2026, 3, 31), 1000),
+                _reading(date(2026, 4, 1), 1000),
+            ],
+            CHARGES,
+            priced_through,
+            3.0,
+        )
+        assert [row["start"].date() for row in rows] == [date(2026, 4, 1)]
+        assert rows[0]["sum"] == 7.0
+
+    def test_a_day_no_charges_cover_is_left_unpriced(self) -> None:
+        rows = price_readings(
+            [_reading(date(2020, 1, 1), 1000), _reading(date(2026, 4, 1), 1000)],
+            CHARGES,
+            None,
+            0.0,
+        )
+        assert [row["start"].date() for row in rows] == [date(2026, 4, 1)]
+
+    def test_no_readings(self) -> None:
+        assert price_readings([], CHARGES, None, 0.0) == []
+
+    def test_nothing_priced_yet_prices_everything(self) -> None:
+        # An entry upgrading from a version that wrote no cost statistic has
+        # its whole history waiting, and no watermark to stop at.
+        rows = price_readings(
+            [
+                _reading(date(2026, 3, 31), 1000),
+                _reading(date(2026, 4, 1), 1000),
+            ],
+            CHARGES,
+            None,
+            0.0,
+        )
+        assert len(rows) == 2
+        assert rows[0]["sum"] == 3.0

@@ -14,7 +14,7 @@ It uses the [thameswaterapi](https://github.com/jelmer/thameswaterapi) Python pa
 
 The integration exposes the following entities:
 
-* **Water consumption** — the latest meter read in litres, with hourly external statistics injected for use in the Energy dashboard.
+* **Water consumption** — the latest meter read in litres, with hourly external statistics injected for use in the Energy dashboard, and a cost statistic in GBP alongside them.
 * **Outstanding balance** — the amount currently due on your Thames Water account, in GBP. The current balance and an `is_in_credit` flag are exposed as attributes.
 * **Tariff** — the current metered-household charges for the Thames Water region:
   * **Unit Rate** (`GBP/L`) — combined clean water + wastewater volumetric rate, per litre. Because it is denominated in litres it can be attached directly to the Energy dashboard water source as the price entity.
@@ -26,7 +26,9 @@ The integration exposes the following entities:
 
 ### Water cost in the Energy dashboard
 
-Attach the **Unit Rate** sensor as the price for your water source: in **Settings → Dashboards → Energy → Water consumption**, edit the source and choose *Use an entity tracking the total costs*/*Use a price entity* and select `sensor.thames_water_unit_rate`. (The standing charge is a flat daily amount and is not part of the volumetric price.)
+In **Settings → Dashboards → Energy → Water consumption**, edit the source and choose *Use a statistic tracking the total costs*, then pick `thames_water:thameswater_consumption_cost`. Each reading in it is priced at the rate that was in force on the reading's own date, which matters because readings arrive about three days late and charges change on 1 April.
+
+The **Unit Rate** sensor is a figure to read rather than something to attach: a price entity is applied at whatever rate is showing when a reading lands, which cannot price a backfill or a window spanning a price change. (The standing charge is a flat daily amount and is not part of the volumetric price either way.)
 
 ## Installation
 
@@ -60,7 +62,7 @@ Then, add the integration:
 
 ## Energy Management
 
-The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**.
+The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**, with **thames_water:thameswater_consumption_cost** as its cost statistic.
 
 Data is fetched every 12 hours by default, in a single hourly request covering
 everything missing since the last one, so an instance that was switched off for

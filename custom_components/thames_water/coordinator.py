@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import logging
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,7 @@ from thameswaterapi import (
     ThamesWater,
     get_tariff,
     meter_usage_lines_to_timeseries,
+    tariff_for,
 )
 
 from homeassistant.components.recorder import get_instance
@@ -27,6 +28,7 @@ from homeassistant.components.recorder.models import (
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
+    statistics_during_period,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
@@ -45,6 +47,7 @@ LONDON_TZ = ZoneInfo("Europe/London")
 
 HOURLY_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_hourly"
 CONSUMPTION_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption"
+COST_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption_cost"
 
 # The tariff is a fixed annual published scheme, so once a day is ample.
 TARIFF_SCAN_INTERVAL = timedelta(hours=24)
@@ -101,6 +104,53 @@ def generate_hourly_statistics(
     ]
 
 
+def charges_for(days: set[date]) -> dict[date, Tariff]:
+    """Look up the charges in force on each day.
+
+    Blocking, because a day past the published table sends `tariff_for` to
+    the help page. A day nothing covers is left out, and the readings on it
+    go unpriced rather than taking a rate that was not theirs.
+    """
+    charges = {}
+    for day in days:
+        try:
+            charges[day] = tariff_for(day)
+        except TariffError:
+            _LOGGER.debug("No published charges cover %s", day)
+    return charges
+
+
+def price_readings(
+    consumption: list[StatisticData],
+    charges: dict[date, Tariff],
+    priced_through: datetime | None,
+    running_total: float,
+) -> list[StatisticData]:
+    """Price each reading at the rate in force on its own date.
+
+    A reading already priced is never priced again, because cost
+    accumulates while a consumption sum is the meter's own odometer.
+    """
+    rows: list[StatisticData] = []
+
+    for reading in consumption:
+        if priced_through is not None and reading["start"] <= priced_through:
+            continue
+        tariff = charges.get(reading["start"].astimezone(LONDON_TZ).date())
+        if tariff is None:
+            continue
+        running_total += reading["state"] * tariff.unit_rate_per_litre
+        rows.append(
+            StatisticData(
+                start=reading["start"],
+                state=round(reading["state"] * tariff.unit_rate_per_litre, 4),
+                sum=round(running_total, 4),
+            )
+        )
+
+    return rows
+
+
 def _statistic_metadata(statistic_id: str, name: str) -> StatisticMetaData:
     return StatisticMetaData(
         has_mean=False,
@@ -149,6 +199,7 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             raise UpdateFailed(str(err)) from err
 
         consumption = self._write_statistics(readings)
+        await self._async_write_cost_statistics(consumption)
 
         return ThamesWaterData(
             account=readings.account,
@@ -221,6 +272,104 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         self._inject(HOURLY_STATISTIC_ID, "Thames Water Consumption (Hourly)", hourly)
         self._inject(CONSUMPTION_STATISTIC_ID, "Thames Water Consumption", hourly)
         return hourly
+
+    async def _async_write_cost_statistics(
+        self, consumption: list[StatisticData]
+    ) -> None:
+        """Write what each of those readings cost.
+
+        Readings arrive about three days late and a backfill covers a month,
+        so a window can span a price change. The Energy dashboard's own cost
+        sensor prices whatever the meter reports at the rate showing when it
+        reports it, which cannot put last year's rate on last year's water.
+        """
+        if not consumption:
+            return
+
+        priced_through, running_total = await self._async_cost_watermark()
+        if priced_through is None:
+            # Nothing has ever been priced, and the readings already in the
+            # recorder are worth as much as the ones just fetched. Upstream
+            # wrote no cost statistic at all, so an entry upgrading to this
+            # version has a full history waiting and no rows to conflict with.
+            consumption = await self._async_all_consumption(consumption)
+
+        days = {row["start"].astimezone(LONDON_TZ).date() for row in consumption}
+        charges = await self.hass.async_add_executor_job(charges_for, days)
+        rows = price_readings(consumption, charges, priced_through, running_total)
+        if not rows:
+            return
+
+        _LOGGER.debug(
+            "Injecting %d cost statistics (%s to %s)",
+            len(rows),
+            rows[0]["start"],
+            rows[-1]["start"],
+        )
+        async_add_external_statistics(
+            self.hass,
+            StatisticMetaData(
+                has_mean=False,
+                has_sum=True,
+                mean_type=StatisticMeanType.NONE,
+                name="Thames Water Consumption Cost",
+                source=DOMAIN,
+                statistic_id=COST_STATISTIC_ID,
+                unit_class=None,
+                unit_of_measurement="GBP",
+            ),
+            rows,
+        )
+
+    async def _async_all_consumption(
+        self, fetched: list[StatisticData]
+    ) -> list[StatisticData]:
+        """Return every consumption reading on record, newest write winning.
+
+        The rows just fetched are queued for the recorder rather than in it,
+        so they are merged over what a read returns instead of replacing it.
+        """
+        history = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            dt_util.utc_from_timestamp(0),
+            None,
+            {CONSUMPTION_STATISTIC_ID},
+            "hour",
+            None,
+            {"state", "sum"},
+        )
+
+        readings = {
+            dt_util.utc_from_timestamp(row["start"]): StatisticData(
+                start=dt_util.utc_from_timestamp(row["start"]),
+                state=row["state"],
+                sum=row["sum"],
+            )
+            for row in history.get(CONSUMPTION_STATISTIC_ID, [])
+        }
+        readings.update({row["start"]: row for row in fetched})
+
+        _LOGGER.debug(
+            "Pricing %d readings, none having been priced before", len(readings)
+        )
+        return [readings[start] for start in sorted(readings)]
+
+    async def _async_cost_watermark(self) -> tuple[datetime | None, float]:
+        """Return how far cost has been priced, and the total to carry on from.
+
+        Cost accumulates, unlike consumption, whose sum is the meter's own
+        odometer, so a reading already priced must not be priced again when
+        the day holding the watermark is re-requested.
+        """
+        last_stat = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, COST_STATISTIC_ID, True, {"sum"}
+        )
+        if not last_stat:
+            return None, 0.0
+
+        row = last_stat[COST_STATISTIC_ID][0]
+        return dt_util.utc_from_timestamp(row["start"]), row.get("sum") or 0.0
 
     def _inject(
         self, statistic_id: str, name: str, statistics: list[StatisticData]
