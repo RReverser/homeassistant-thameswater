@@ -54,25 +54,44 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         assert self._client is not None
 
         account_numbers = self._client.get_account_numbers()
-        if len(account_numbers) <= 1:
-            self._credentials["account_number"] = str(self._client.account_number)
-            return await self.async_step_meter()
-
-        if user_input is not None:
-            self._credentials["account_number"] = user_input["account_number"]
+        # A login with one account, or none listed at all, has nothing to
+        # choose between, and the client already holds the account its own
+        # token names as the default.
+        choosing = len(account_numbers) > 1
+        if choosing:
+            if user_input is None:
+                return self._show_account_form(account_numbers)
             self._client.account_number = int(user_input["account_number"])
+            # The meter endpoints answer for the account whose page was
+            # last visited, and the account just changed.
             await self.hass.async_add_executor_job(self._client._visit_meter_page)
-            return await self.async_step_meter()
 
-        account_options = {str(n): str(n) for n in account_numbers}
+        # `get_account` names the account in a header taken from
+        # `account_number`, so it answers for whichever one is set.
+        account = await self.hass.async_add_executor_job(self._client.get_account)
+        if not account.is_smart_metered:
+            if not choosing:
+                return self.async_abort(reason="not_smart_metered")
+            return self._show_account_form(
+                account_numbers, {"base": "not_smart_metered"}
+            )
+
+        self._credentials["account_number"] = str(self._client.account_number)
+        return await self.async_step_meter()
+
+    def _show_account_form(
+        self, account_numbers: list[int], errors: dict[str, str] | None = None
+    ):
+        """Ask which contract account to read."""
         data_schema = vol.Schema(
             {
-                vol.Required("account_number"): vol.In(account_options),
+                vol.Required("account_number"): vol.In(
+                    {str(n): str(n) for n in account_numbers}
+                ),
             }
         )
-
         return self.async_show_form(
-            step_id="account", data_schema=data_schema
+            step_id="account", data_schema=data_schema, errors=errors
         )
 
     async def async_step_meter(self, user_input=None):

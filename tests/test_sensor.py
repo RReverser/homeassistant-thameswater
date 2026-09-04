@@ -9,6 +9,7 @@ from thameswaterapi import Line, MeterUsage
 
 from custom_components.thames_water.sensor import (
     _generate_hourly_statistics_from_meter_usage,
+    _still_in_force,
 )
 
 LONDON_TZ = ZoneInfo("Europe/London")
