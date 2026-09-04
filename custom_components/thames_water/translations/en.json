@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "account": {
+        "data": {
+          "account_number": "Contract account"
+        }
+      }
+    },
+    "error": {
+      "not_smart_metered": "That account has no smart meter, so Thames Water publishes no readings for it."
+    },
+    "abort": {
+      "not_smart_metered": "This login has no smart-metered account, so there are no readings to fetch."
+    }
+  }
+}
