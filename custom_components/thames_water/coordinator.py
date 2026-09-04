@@ -101,6 +101,41 @@ def generate_hourly_statistics(
     ]
 
 
+def write_consumption_statistics(
+    hass: HomeAssistant, start_day: date, lines: list[Line]
+) -> list[StatisticData]:
+    """Write a window of readings as statistics, returning the rows written.
+
+    A well-formed response with no lines is a valid answer meaning there is
+    no data for that range: nothing is written and the watermark stays where
+    it was, so the next cycle asks again.
+    """
+    hourly = generate_hourly_statistics(start_day, lines)
+    if not hourly:
+        _LOGGER.debug("Thames Water published no readings for this window")
+        return []
+
+    _inject(hass, HOURLY_STATISTIC_ID, "Thames Water Consumption (Hourly)", hourly)
+    _inject(hass, CONSUMPTION_STATISTIC_ID, "Thames Water Consumption", hourly)
+    return hourly
+
+
+def _inject(
+    hass: HomeAssistant, statistic_id: str, name: str, statistics: list[StatisticData]
+) -> None:
+    """Push statistics into the recorder."""
+    _LOGGER.debug(
+        "Injecting %d statistics for %s (%s to %s)",
+        len(statistics),
+        statistic_id,
+        statistics[0]["start"],
+        statistics[-1]["start"],
+    )
+    async_add_external_statistics(
+        hass, _statistic_metadata(statistic_id, name), statistics
+    )
+
+
 def _statistic_metadata(statistic_id: str, name: str) -> StatisticMetaData:
     return StatisticMetaData(
         has_mean=False,
@@ -148,7 +183,9 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
         except Exception as err:
             raise UpdateFailed(str(err)) from err
 
-        consumption = self._write_statistics(readings)
+        consumption = write_consumption_statistics(
+            self.hass, readings.start_day, readings.lines
+        )
 
         return ThamesWaterData(
             account=readings.account,
@@ -204,37 +241,6 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[ThamesWaterData]):
             account=client.get_account(),
             start_day=start_day,
             lines=usage.Lines,
-        )
-
-    def _write_statistics(self, readings: ThamesWaterReadings) -> list[StatisticData]:
-        """Write the consumption statistics and return the rows written.
-
-        A well-formed response with no lines is a valid answer meaning there
-        is no data for that range: nothing is written and the watermark stays
-        where it was, so the next cycle asks again.
-        """
-        hourly = generate_hourly_statistics(readings.start_day, readings.lines)
-        if not hourly:
-            _LOGGER.debug("Thames Water published no readings for this window")
-            return []
-
-        self._inject(HOURLY_STATISTIC_ID, "Thames Water Consumption (Hourly)", hourly)
-        self._inject(CONSUMPTION_STATISTIC_ID, "Thames Water Consumption", hourly)
-        return hourly
-
-    def _inject(
-        self, statistic_id: str, name: str, statistics: list[StatisticData]
-    ) -> None:
-        """Push statistics into the recorder."""
-        _LOGGER.debug(
-            "Injecting %d statistics for %s (%s to %s)",
-            len(statistics),
-            statistic_id,
-            statistics[0]["start"],
-            statistics[-1]["start"],
-        )
-        async_add_external_statistics(
-            self.hass, _statistic_metadata(statistic_id, name), statistics
         )
 
 

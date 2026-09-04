@@ -1,14 +1,17 @@
 """Config flow for Thames Water integration."""
 
 from collections.abc import Mapping
+from datetime import date, timedelta
 from typing import Any
 
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
-from thameswaterapi import AuthenticationError, ThamesWater
+from .const import DEFAULT_HISTORY_DAYS, DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
+from .coordinator import LONDON_TZ, write_consumption_statistics
+from thameswaterapi import AuthenticationError, Line, ThamesWater
 
 
 class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -118,14 +121,25 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            return self.async_create_entry(
-                title="Thames Water",
-                data={
-                    **self._credentials,
-                    "meter_id": user_input["meter_id"],
-                    "update_interval_hours": user_input["update_interval_hours"],
-                },
+            start_day = dt_util.now(LONDON_TZ).date() - timedelta(
+                days=user_input["history_days"]
             )
+            try:
+                lines = await self.hass.async_add_executor_job(
+                    self._fetch_history, user_input["meter_id"], start_day
+                )
+            except Exception:
+                errors["base"] = "cannot_connect"
+            else:
+                write_consumption_statistics(self.hass, start_day, lines)
+                return self.async_create_entry(
+                    title="Thames Water",
+                    data={
+                        **self._credentials,
+                        "meter_id": user_input["meter_id"],
+                        "update_interval_hours": user_input["update_interval_hours"],
+                    },
+                )
 
         meter_numbers = await self.hass.async_add_executor_job(
             self._client.get_meter_numbers
@@ -143,12 +157,30 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "update_interval_hours",
                     default=DEFAULT_UPDATE_INTERVAL_HOURS,
                 ): vol.All(int, vol.Range(min=1)),
+                # Width costs nothing: however many days are asked for, the
+                # readings come back in one request.
+                vol.Required(
+                    "history_days",
+                    default=DEFAULT_HISTORY_DAYS,
+                ): vol.All(int, vol.Range(min=1)),
             }
         )
 
         return self.async_show_form(
             step_id="meter", data_schema=data_schema, errors=errors
         )
+
+    def _fetch_history(self, meter_id: str, start_day: date) -> list[Line]:
+        """Fetch the readings to seed the statistics with (blocking).
+
+        One request covers the whole window, so the depth chosen above makes
+        no difference to how long this step takes.
+        """
+        assert self._client is not None
+        usage = self._client.get_meter_usage(
+            meter_id, start_day, dt_util.now(LONDON_TZ).date(), granularity="H"
+        )
+        return usage.Lines
 
     @staticmethod
     def _authenticate(username: str, password: str) -> ThamesWater:

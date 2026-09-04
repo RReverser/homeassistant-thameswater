@@ -66,6 +66,14 @@ Data is fetched every 12 hours by default, in a single hourly request covering
 everything missing since the last one, so an instance that was switched off for
 a while catches up in one go rather than losing those days.
 
+Setup asks how many days of past readings to import, defaulting to the 30 the
+meters page itself shows. The whole range arrives in one request whatever its
+width, so a deeper import costs no more than a shallow one. The import happens
+before the entry is created, so a meter that answers with nothing or a login
+that has expired shows up in the dialog rather than in the log an hour later.
+Refreshes from then on resume from the newest reading stored, so importing
+more later means setting the integration up again.
+
 Readings run about three days behind. A response ending today is truncated at a
 whole-day boundary rather than padded, so the days not yet published are simply
 absent and the next refresh asks for them again.
