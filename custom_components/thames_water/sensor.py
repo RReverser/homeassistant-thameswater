@@ -26,6 +26,7 @@ from homeassistant.components.recorder.models import (
 )
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
@@ -508,10 +509,26 @@ TARIFF_SENSORS: tuple[ThamesWaterTariffSensorDescription, ...] = (
 )
 
 
+def _still_in_force(effective_date: date) -> bool:
+    """Whether charges that took effect on that date still apply.
+
+    A charging year runs from 1 April to 31 March, so charges lapse on the
+    1 April after the one they started on.
+    """
+    lapses = date(effective_date.year + 1, 4, 1)
+    return datetime.now(ZoneInfo("Europe/London")).date() < lapses
+
+
 class ThamesWaterTariffSensor(
-    CoordinatorEntity[ThamesWaterTariffCoordinator], SensorEntity
+    CoordinatorEntity[ThamesWaterTariffCoordinator], RestoreSensor
 ):
-    """A sensor derived from the scraped Thames Water tariff."""
+    """A sensor derived from the scraped Thames Water tariff.
+
+    The figures hold for a charging year, so the last known ones are worth
+    more than nothing while the page is unreachable or a restart is in
+    progress. They are restored until a scrape succeeds, or until the
+    charging year they belong to ends, whichever comes first.
+    """
 
     entity_description: ThamesWaterTariffSensorDescription
 
@@ -531,10 +548,45 @@ class ThamesWaterTariffSensor(
             model="Tariff",
             name="Thames Water Tariff",
         )
+        self._restored_value: float | None = None
+        self._restored_effective_date: date | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last known figure, unless its charging year has ended."""
+        await super().async_added_to_hass()
+
+        last_state = await self.async_get_last_state()
+        last_data = await self.async_get_last_sensor_data()
+        if last_state is None or last_data is None:
+            return
+
+        stored = last_state.attributes.get("effective_date")
+        if stored is None:
+            return
+
+        effective_date = date.fromisoformat(stored)
+        if _still_in_force(effective_date):
+            self._restored_value = last_data.native_value
+            self._restored_effective_date = effective_date
 
     @property
     def native_value(self) -> float | None:
         """Return the value derived from the current tariff."""
         if self.coordinator.data is None:
-            return None
+            return self._restored_value
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        """Expose when the figures took effect.
+
+        A restart reads this back to decide whether the value it restores
+        is still the rate in force.
+        """
+        tariff = self.coordinator.data
+        effective_date = (
+            tariff.effective_date if tariff else self._restored_effective_date
+        )
+        if effective_date is None:
+            return None
+        return {"effective_date": effective_date.isoformat()}
