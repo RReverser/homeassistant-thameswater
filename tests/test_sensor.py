@@ -33,9 +33,9 @@ def _make_meter_usage(lines: list[Line]) -> MeterUsage:
     )
 
 
-def _make_line(usage: float, read: float) -> Line:
+def _make_line(usage: float, read: float, label: str = "") -> Line:
     return Line(
-        Label="",
+        Label=label,
         Usage=usage,
         Read=read,
         IsEstimated=False,
@@ -52,7 +52,7 @@ class TestGenerateHourlyStatistics:
         assert stats == []
 
     def test_single_line(self) -> None:
-        meter_usage = _make_meter_usage([_make_line(10.0, 100.0)])
+        meter_usage = _make_meter_usage([_make_line(10.0, 100.0, "0:00")])
         stats = _generate_hourly_statistics_from_meter_usage(
             date(2024, 1, 1), meter_usage
         )
@@ -64,9 +64,9 @@ class TestGenerateHourlyStatistics:
     def test_multiple_lines(self) -> None:
         meter_usage = _make_meter_usage(
             [
-                _make_line(10.0, 100.0),
-                _make_line(20.0, 120.0),
-                _make_line(5.0, 125.0),
+                _make_line(10.0, 100.0, "0:00"),
+                _make_line(20.0, 120.0, "1:00"),
+                _make_line(5.0, 125.0, "2:00"),
             ]
         )
         stats = _generate_hourly_statistics_from_meter_usage(
@@ -80,13 +80,33 @@ class TestGenerateHourlyStatistics:
         assert stats[1]["state"] == 20
         assert stats[2]["state"] == 5
 
-    def test_datetime_start(self) -> None:
-        meter_usage = _make_meter_usage([_make_line(10.0, 100.0)])
+    def test_datetime_start_uses_its_date(self) -> None:
+        # Only the date of the start argument is used; the hour comes from
+        # the line's own label.
+        meter_usage = _make_meter_usage([_make_line(10.0, 100.0, "12:00")])
         stats = _generate_hourly_statistics_from_meter_usage(
-            datetime(2024, 1, 1, 12, 0), meter_usage
+            datetime(2024, 1, 1, 6, 0), meter_usage
         )
         assert len(stats) == 1
         assert stats[0]["start"] == datetime(2024, 1, 1, 12, 0, tzinfo=LONDON_TZ)
+
+    def test_a_missing_hour_does_not_shift_the_rest(self) -> None:
+        # The spring-forward day has 23 labels, with 01:00 absent, so the
+        # hours after a gap have to come from the label rather than the
+        # position.
+        meter_usage = _make_meter_usage(
+            [
+                _make_line(10.0, 100.0, "0:00"),
+                _make_line(5.0, 125.0, "14:00"),
+            ]
+        )
+        stats = _generate_hourly_statistics_from_meter_usage(
+            date(2024, 1, 1), meter_usage
+        )
+        assert [stat["start"] for stat in stats] == [
+            datetime(2024, 1, 1, 0, 0, tzinfo=LONDON_TZ),
+            datetime(2024, 1, 1, 14, 0, tzinfo=LONDON_TZ),
+        ]
 
 
 class TestGenerateDailyStatistics:
