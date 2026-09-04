@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from thameswaterapi import Line, MeterUsage
 
 from custom_components.thames_water.sensor import (
-    _generate_daily_statistics_from_meter_usage,
     _generate_hourly_statistics_from_meter_usage,
 )
 
@@ -108,63 +107,3 @@ class TestGenerateHourlyStatistics:
             datetime(2024, 1, 1, 14, 0, tzinfo=LONDON_TZ),
         ]
 
-
-class TestGenerateDailyStatistics:
-    def test_empty_lines(self) -> None:
-        meter_usage = _make_meter_usage([])
-        stats = _generate_daily_statistics_from_meter_usage(
-            date(2024, 1, 1), meter_usage
-        )
-        assert stats == []
-
-    def test_single_line(self) -> None:
-        meter_usage = _make_meter_usage([_make_line(100.0, 1000.0)])
-        stats = _generate_daily_statistics_from_meter_usage(
-            date(2024, 1, 1), meter_usage
-        )
-        assert len(stats) == 1
-        assert stats[0]["start"] == datetime(2024, 1, 1, 0, 0, tzinfo=LONDON_TZ)
-        assert stats[0]["state"] == 100
-        assert stats[0]["sum"] == 1000
-
-    def test_multiple_lines(self) -> None:
-        meter_usage = _make_meter_usage(
-            [
-                _make_line(100.0, 1000.0),
-                _make_line(150.0, 1150.0),
-                _make_line(80.0, 1230.0),
-            ]
-        )
-        stats = _generate_daily_statistics_from_meter_usage(
-            date(2024, 1, 1), meter_usage
-        )
-        assert len(stats) == 3
-        assert stats[0]["start"] == datetime(2024, 1, 1, 0, 0, tzinfo=LONDON_TZ)
-        assert stats[1]["start"] == datetime(2024, 1, 2, 0, 0, tzinfo=LONDON_TZ)
-        assert stats[2]["start"] == datetime(2024, 1, 3, 0, 0, tzinfo=LONDON_TZ)
-        assert stats[0]["state"] == 100
-        assert stats[1]["state"] == 150
-        assert stats[2]["state"] == 80
-
-    def test_datetime_start_strips_time(self) -> None:
-        meter_usage = _make_meter_usage([_make_line(100.0, 1000.0)])
-        stats = _generate_daily_statistics_from_meter_usage(
-            datetime(2024, 1, 1, 15, 30, 45), meter_usage
-        )
-        assert len(stats) == 1
-        assert stats[0]["start"] == datetime(2024, 1, 1, 0, 0, tzinfo=LONDON_TZ)
-
-    def test_timestamps_are_timezone_aware(self) -> None:
-        meter_usage = _make_meter_usage([_make_line(100.0, 1000.0)])
-        stats = _generate_daily_statistics_from_meter_usage(
-            date(2024, 1, 1), meter_usage
-        )
-        assert stats[0]["start"].tzinfo is not None
-
-    def test_usage_values_are_truncated_to_int(self) -> None:
-        meter_usage = _make_meter_usage([_make_line(99.7, 1000.3)])
-        stats = _generate_daily_statistics_from_meter_usage(
-            date(2024, 1, 1), meter_usage
-        )
-        assert stats[0]["state"] == 99
-        assert stats[0]["sum"] == 1000
