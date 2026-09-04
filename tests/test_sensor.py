@@ -10,6 +10,7 @@ from thameswaterapi import Line, MeterUsage
 from custom_components.thames_water.sensor import (
     _generate_daily_statistics_from_meter_usage,
     _generate_hourly_statistics_from_meter_usage,
+    _still_in_force,
 )
 
 LONDON_TZ = ZoneInfo("Europe/London")
@@ -148,3 +149,18 @@ class TestGenerateDailyStatistics:
         )
         assert stats[0]["state"] == 99
         assert stats[0]["sum"] == 1000
+
+
+class TestStillInForce:
+    @staticmethod
+    def _charging_year_start(today: date) -> date:
+        """The 1 April the charging year containing ``today`` began on."""
+        year = today.year if today >= date(today.year, 4, 1) else today.year - 1
+        return date(year, 4, 1)
+
+    def test_this_charging_year(self) -> None:
+        assert _still_in_force(self._charging_year_start(date.today()))
+
+    def test_the_charging_year_before(self) -> None:
+        started = self._charging_year_start(date.today())
+        assert not _still_in_force(date(started.year - 1, 4, 1))
