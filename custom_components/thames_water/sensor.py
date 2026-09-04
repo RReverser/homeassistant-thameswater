@@ -139,25 +139,6 @@ def _generate_hourly_statistics_from_meter_usage(
     ]
 
 
-def _generate_daily_statistics_from_meter_usage(
-    start: date, meter_usage: MeterUsage
-) -> list[StatisticData]:
-    """Convert daily meter usage lines into StatisticData entries."""
-    tz = ZoneInfo("Europe/London")
-    if isinstance(start, datetime):
-        day = start.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
-    else:
-        day = datetime(start.year, start.month, start.day, tzinfo=tz)
-    return [
-        StatisticData(
-            start=day + timedelta(days=i),
-            state=int(line.Usage),
-            sum=int(line.Read),
-        )
-        for i, line in enumerate(meter_usage.Lines)
-    ]
-
-
 class ThamesWaterSensor(SensorEntity):
     """Thames Water Sensor class."""
 
@@ -187,7 +168,6 @@ class ThamesWaterSensor(SensorEntity):
 
         self._unique_id = unique_id
         self._attr_should_poll = False
-        self._last_daily_fetch_date: date | None = None
         self._latest_reading_time: datetime | None = None
 
     @property
@@ -305,24 +285,6 @@ class ThamesWaterSensor(SensorEntity):
             _LOGGER.exception("Failed to fetch hourly meter usage from Thames Water")
             hourly_usage = None
 
-        today = date.today()
-        if self._last_daily_fetch_date == today:
-            _LOGGER.debug(
-                "Skipping daily meter usage fetch; already fetched today (%s)",
-                today,
-            )
-            daily_usage = None
-            daily_fetch_attempted = False
-        else:
-            daily_fetch_attempted = True
-            try:
-                daily_usage = await self._hass.async_add_executor_job(
-                    self._fetch_meter_usage, start_dt, end_dt, "D"
-                )
-            except Exception:
-                _LOGGER.exception("Failed to fetch daily meter usage from Thames Water")
-                daily_usage = None
-
         # Hourly statistics
         if hourly_usage is not None and len(hourly_usage.Lines) > 0:
             _LOGGER.info("Fetched %d hourly entries", len(hourly_usage.Lines))
@@ -345,38 +307,11 @@ class ThamesWaterSensor(SensorEntity):
                 end_dt,
             )
 
-        # Daily statistics
-        if daily_usage is not None and len(daily_usage.Lines) > 0:
-            _LOGGER.info("Fetched %d daily entries", len(daily_usage.Lines))
-            daily_stats = _generate_daily_statistics_from_meter_usage(
-                start_dt, daily_usage
-            )
-            if self._state is None:
-                self._state = daily_usage.Lines[-1].Read
-                if daily_stats:
-                    self._latest_reading_time = daily_stats[-1]["start"]
-            self._inject_statistics(
-                f"{DOMAIN}:thameswater_consumption_daily",
-                "Thames Water Consumption (Daily)",
-                daily_stats,
-            )
-            self._last_daily_fetch_date = today
-        else:
-            daily_stats = None
-            if daily_fetch_attempted:
-                _LOGGER.warning(
-                    "Thames Water returned no daily data for %s to %s",
-                    start_dt,
-                    end_dt,
-                )
-
-        # Combined: prefer hourly, fall back to daily
-        combined_stats = hourly_stats or daily_stats
-        if combined_stats is not None:
+        if hourly_stats is not None:
             self._inject_statistics(
                 f"{DOMAIN}:thameswater_consumption",
                 "Thames Water Consumption",
-                combined_stats,
+                hourly_stats,
             )
 
 
