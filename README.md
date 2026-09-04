@@ -22,7 +22,7 @@ The integration exposes the following entities:
   * **Volumetric Rate** (`GBP/m³`) — the combined rate per cubic metre.
   * Individual **Clean Water Rate**, **Wastewater Rate**, **Water Fixed Charge** and **Wastewater Fixed Charge** sensors (disabled by default; enable them for a full bill breakdown).
 
-  Thames Water has no tariff API — metered charges are a fixed annual "Scheme of Charges", published per region rather than per account, so the same figures apply to every customer. This integration reads them from Thames Water's public [metered customers](https://www.thameswater.co.uk/help/account-and-billing/understand-your-bill/metered-customers) help page (no credentials required) and refreshes daily; they normally only change on 1 April. The fixed charges use the standard rate (not the surface-water-drainage rebate rate). If the page changes shape the sensors keep reporting the figures last read, and consumption and balance are unaffected.
+  Thames Water has no tariff API — metered charges are a fixed annual "Scheme of Charges", published per region rather than per account, so the same figures apply to every customer. This integration reads them from Thames Water's public [metered customers](https://www.thameswater.co.uk/help/account-and-billing/understand-your-bill/metered-customers) help page (no credentials required) and refreshes daily; they normally only change on 1 April. The fixed charges use the standard rate (not the surface-water-drainage rebate rate). If the page changes shape the sensors keep reporting the figures last read (until the next charging year), and consumption and balance are unaffected.
 
 ### Water cost in the Energy dashboard
 
