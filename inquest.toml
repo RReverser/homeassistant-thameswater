@@ -1,0 +1,4 @@
+test_command = "pytest-3 --subunit $IDOPTION $LISTOPT"
+test_id_option = "--subunit-load-list $IDFILE"
+test_list_option = "--collect-only"
+group_regex = "^(.*)\\.[^.]+$"
