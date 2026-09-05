@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from thameswaterapi import Line, MeterUsage
 
+from custom_components.thames_water import sensor as sensor_module
 from custom_components.thames_water.sensor import (
+    ThamesWaterSensor,
     _generate_daily_statistics_from_meter_usage,
     _generate_hourly_statistics_from_meter_usage,
     _still_in_force,
@@ -184,3 +188,126 @@ class TestStillInForce:
     def test_the_charging_year_before(self) -> None:
         started = self._charging_year_start(date.today())
         assert not _still_in_force(date(started.year - 1, 4, 1))
+
+
+def _frozen_date(today: date) -> type:
+    """Return a `date` stand-in whose `today()` returns the given day.
+
+    Sensor code uses the module-level `date` binding for two things:
+    constructing dates (`date(y, m, d)`) and calling `date.today()`. This
+    helper preserves the former and freezes the latter.
+    """
+
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return today
+
+    return _FrozenDate
+
+
+class _FakeHass:
+    """Minimal stand-in for HomeAssistant that runs executor jobs inline."""
+
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
+
+
+def _make_sensor() -> ThamesWaterSensor:
+    return ThamesWaterSensor(
+        hass=_FakeHass(),
+        name="Test",
+        username="u",
+        password="p",
+        account_number="1",
+        meter_id="m",
+        unique_id="uid",
+    )
+
+
+class TestDailyFetchThrottling:
+    """The daily meter usage endpoint should be hit at most once per day."""
+
+    def _run_update(
+        self, sensor: ThamesWaterSensor, today: date, fetch_calls: list[str]
+    ) -> None:
+        def fake_fetch(start_dt, end_dt, granularity="H"):
+            fetch_calls.append(granularity)
+            return _make_meter_usage([_make_line(1.0, 1.0, "0:00")])
+
+        with (
+            patch.object(sensor, "_fetch_meter_usage", side_effect=fake_fetch),
+            patch.object(sensor, "_inject_statistics"),
+            patch.object(sensor_module, "date", _frozen_date(today)),
+        ):
+            asyncio.run(sensor.async_update())
+
+    def test_daily_fetched_once_per_day(self) -> None:
+        sensor = _make_sensor()
+        calls: list[str] = []
+        today = date(2024, 6, 1)
+
+        self._run_update(sensor, today, calls)
+        self._run_update(sensor, today, calls)
+
+        assert calls.count("D") == 1
+        assert calls.count("H") == 2
+
+    def test_daily_fetched_again_on_new_day(self) -> None:
+        sensor = _make_sensor()
+        calls: list[str] = []
+
+        self._run_update(sensor, date(2024, 6, 1), calls)
+        self._run_update(sensor, date(2024, 6, 2), calls)
+
+        assert calls.count("D") == 2
+        assert calls.count("H") == 2
+
+    def test_daily_retried_when_previous_fetch_returned_no_data(self) -> None:
+        """A failed/empty daily fetch must not suppress the next attempt."""
+        sensor = _make_sensor()
+        calls: list[str] = []
+        today = date(2024, 6, 1)
+
+        def fake_fetch_empty_daily(start_dt, end_dt, granularity="H"):
+            calls.append(granularity)
+            if granularity == "D":
+                return _make_meter_usage([])
+            return _make_meter_usage([_make_line(1.0, 1.0, "0:00")])
+
+        with (
+            patch.object(
+                sensor, "_fetch_meter_usage", side_effect=fake_fetch_empty_daily
+            ),
+            patch.object(sensor, "_inject_statistics"),
+            patch.object(sensor_module, "date", _frozen_date(today)),
+        ):
+            asyncio.run(sensor.async_update())
+            asyncio.run(sensor.async_update())
+
+        assert calls.count("D") == 2
+
+    def test_daily_retried_when_previous_fetch_raised(self) -> None:
+        sensor = _make_sensor()
+        calls: list[str] = []
+        today = date(2024, 6, 1)
+        raise_once = {"D": True}
+
+        def fake_fetch_flaky_daily(start_dt, end_dt, granularity="H"):
+            calls.append(granularity)
+            if granularity == "D" and raise_once["D"]:
+                raise_once["D"] = False
+                raise RuntimeError("boom")
+            return _make_meter_usage([_make_line(1.0, 1.0, "0:00")])
+
+        with (
+            patch.object(
+                sensor, "_fetch_meter_usage", side_effect=fake_fetch_flaky_daily
+            ),
+            patch.object(sensor, "_inject_statistics"),
+            patch.object(sensor_module, "date", _frozen_date(today)),
+        ):
+            asyncio.run(sensor.async_update())
+            asyncio.run(sensor.async_update())
+
+        assert calls.count("D") == 2

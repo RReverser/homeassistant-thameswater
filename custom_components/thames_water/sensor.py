@@ -187,6 +187,7 @@ class ThamesWaterSensor(SensorEntity):
 
         self._unique_id = unique_id
         self._attr_should_poll = False
+        self._last_daily_fetch_date: date | None = None
 
     @property
     def unique_id(self) -> str:
@@ -281,13 +282,23 @@ class ThamesWaterSensor(SensorEntity):
             _LOGGER.exception("Failed to fetch hourly meter usage from Thames Water")
             hourly_usage = None
 
-        try:
-            daily_usage = await self._hass.async_add_executor_job(
-                self._fetch_meter_usage, start_dt, end_dt, "D"
+        today = date.today()
+        if self._last_daily_fetch_date == today:
+            _LOGGER.debug(
+                "Skipping daily meter usage fetch; already fetched today (%s)",
+                today,
             )
-        except Exception:
-            _LOGGER.exception("Failed to fetch daily meter usage from Thames Water")
             daily_usage = None
+            daily_fetch_attempted = False
+        else:
+            daily_fetch_attempted = True
+            try:
+                daily_usage = await self._hass.async_add_executor_job(
+                    self._fetch_meter_usage, start_dt, end_dt, "D"
+                )
+            except Exception:
+                _LOGGER.exception("Failed to fetch daily meter usage from Thames Water")
+                daily_usage = None
 
         # Hourly statistics
         if hourly_usage is not None and len(hourly_usage.Lines) > 0:
@@ -322,13 +333,15 @@ class ThamesWaterSensor(SensorEntity):
                 "Thames Water Consumption (Daily)",
                 daily_stats,
             )
+            self._last_daily_fetch_date = today
         else:
             daily_stats = None
-            _LOGGER.warning(
-                "Thames Water returned no daily data for %s to %s",
-                start_dt,
-                end_dt,
-            )
+            if daily_fetch_attempted:
+                _LOGGER.warning(
+                    "Thames Water returned no daily data for %s to %s",
+                    start_dt,
+                    end_dt,
+                )
 
         # Combined: prefer hourly, fall back to daily
         combined_stats = hourly_stats or daily_stats
