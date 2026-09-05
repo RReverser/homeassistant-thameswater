@@ -8,9 +8,14 @@
       }
     },
     "error": {
-      "not_smart_metered": "That account has no smart meter, so Thames Water publishes no readings for it."
+      "invalid_auth": "Thames Water rejected the username or password.",
+      "cannot_connect": "Could not reach Thames Water. Check the Home Assistant log for details.",
+      "not_smart_metered": "That account has no smart meter, so Thames Water publishes no readings for it.",
+      "no_meters": "The Thames Water account has no meters to read from."
     },
     "abort": {
+      "invalid_auth": "Thames Water rejected the session before an account could be selected.",
+      "cannot_connect": "Could not reach Thames Water while loading the account. Check the Home Assistant log for details.",
       "not_smart_metered": "This login has no smart-metered account, so there are no readings to fetch."
     }
   }
