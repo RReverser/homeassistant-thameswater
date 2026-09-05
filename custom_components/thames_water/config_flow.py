@@ -53,7 +53,9 @@ class ThamesWaterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the account selection step."""
         assert self._client is not None
 
-        account_numbers = self._client.get_account_numbers()
+        account_numbers = await self.hass.async_add_executor_job(
+            self._client.get_account_numbers
+        )
         # A login with one account, or none listed at all, has nothing to
         # choose between, and the client already holds the account its own
         # token names as the default.
