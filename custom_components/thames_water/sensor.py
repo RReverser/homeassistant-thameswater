@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 import logging
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -243,8 +243,8 @@ class ThamesWaterSensor(SensorEntity):
 
     def _fetch_meter_usage(
         self,
-        start_dt: datetime,
-        end_dt: datetime,
+        start: date,
+        end: date,
         granularity: Literal["H", "D", "M"] = "H",
     ) -> MeterUsage:
         """Fetch meter usage from Thames Water API (blocking, run in executor)."""
@@ -254,7 +254,7 @@ class ThamesWaterSensor(SensorEntity):
             account_number=int(self._account_number),
         )
         return thames_water.get_meter_usage(
-            self._meter_id, start_dt, end_dt, granularity=granularity
+            self._meter_id, start, end, granularity=granularity
         )
 
     def _inject_statistics(
@@ -300,12 +300,12 @@ class ThamesWaterSensor(SensorEntity):
 
     async def async_update(self):
         """Fetch data, build statistics, and inject external statistics."""
-        start_dt = datetime.combine(await self._async_start_day(), time.min)
-        end_dt = datetime.now(LONDON_TZ)
+        start = await self._async_start_day()
+        end = datetime.now(LONDON_TZ).date()
 
         try:
             hourly_usage = await self._hass.async_add_executor_job(
-                self._fetch_meter_usage, start_dt, end_dt, "H"
+                self._fetch_meter_usage, start, end, "H"
             )
         except Exception:
             _LOGGER.exception("Failed to fetch hourly meter usage from Thames Water")
@@ -315,7 +315,7 @@ class ThamesWaterSensor(SensorEntity):
         if hourly_usage is not None and len(hourly_usage.Lines) > 0:
             _LOGGER.info("Fetched %d hourly entries", len(hourly_usage.Lines))
             hourly_stats = _generate_hourly_statistics_from_meter_usage(
-                start_dt.date(), hourly_usage
+                start, hourly_usage
             )
             self._state = hourly_usage.Lines[-1].Read
             if hourly_stats:
@@ -329,8 +329,8 @@ class ThamesWaterSensor(SensorEntity):
             hourly_stats = None
             _LOGGER.warning(
                 "Thames Water returned no hourly data for %s to %s",
-                start_dt,
-                end_dt,
+                start,
+                end,
             )
 
         if hourly_stats is not None:

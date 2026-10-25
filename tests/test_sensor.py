@@ -204,7 +204,7 @@ class TestUpdate:
     async def test_last_reading_time_tracks_latest_hourly_line(self) -> None:
         """The last_reading_time attribute reflects the real hour of the latest reading."""
         sensor = _make_sensor()
-        captured: dict[str, datetime] = {}
+        captured: dict[str, date] = {}
 
         def fake_fetch(start_dt, end_dt, granularity="H"):
             captured["start"] = start_dt
@@ -222,7 +222,7 @@ class TestUpdate:
         ):
             await sensor.async_update()
 
-        expected_day = captured["start"].date()
+        expected_day = captured["start"]
         assert sensor.extra_state_attributes == {
             "last_reading_time": datetime(
                 expected_day.year,
@@ -236,9 +236,9 @@ class TestUpdate:
 
 
 class TestResume:
-    async def _fetch_window(self, newest: datetime | None) -> dict[str, datetime]:
+    async def _fetch_window(self, newest: datetime | None) -> dict[str, date]:
         sensor = _make_sensor()
-        captured: dict[str, datetime] = {}
+        captured: dict[str, date] = {}
 
         def fake_fetch(start_dt, end_dt, granularity="H"):
             captured["start"], captured["end"] = start_dt, end_dt
@@ -259,8 +259,8 @@ class TestResume:
     ) -> None:
         window = await self._fetch_window(datetime(2026, 10, 20, 13, tzinfo=LONDON_TZ))
 
-        assert window["start"].date() == date(2026, 10, 20)
-        assert window["end"].date() == datetime.now(LONDON_TZ).date()
+        assert window["start"] == date(2026, 10, 20)
+        assert window["end"] == datetime.now(LONDON_TZ).date()
 
     async def test_a_statistic_just_after_local_midnight_is_that_london_day(
         self,
@@ -268,14 +268,12 @@ class TestResume:
         """00:00 BST is the previous day in UTC but the same day in London."""
         window = await self._fetch_window(datetime(2026, 7, 2, 0, tzinfo=LONDON_TZ))
 
-        assert window["start"].date() == date(2026, 7, 2)
+        assert window["start"] == date(2026, 7, 2)
 
     async def test_first_setup_looks_back_a_fixed_period(self) -> None:
         window = await self._fetch_window(None)
 
-        assert window["start"].date() == (
-            datetime.now(LONDON_TZ).date() - INITIAL_HISTORY
-        )
+        assert window["start"] == (datetime.now(LONDON_TZ).date() - INITIAL_HISTORY)
 
     async def test_statistics_are_dated_from_the_day_resumed_from(self) -> None:
         sensor = _make_sensor()
