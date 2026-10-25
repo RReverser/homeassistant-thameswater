@@ -38,9 +38,8 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfVolume
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -71,7 +70,6 @@ async def async_setup_entry(
 ) -> bool:
     """Set up the Thames Water sensor platform."""
     username = entry.data["username"]
-    password = entry.data["password"]
     account_number = entry.data["account_number"]
     meter_id = entry.data["meter_id"]
 
@@ -86,40 +84,10 @@ async def async_setup_entry(
 
     name = entry.data.get(CONF_NAME, "Thames Water Sensor")
 
-    sensor = ThamesWaterSensor(
-        hass,
-        name,
-        username,
-        password,
-        account_number,
-        meter_id,
-        unique_id,
-    )
-    balance_sensor = ThamesWaterBalanceSensor(
-        hass,
-        username,
-        password,
-        account_number,
-    )
-    async_add_entities([sensor, balance_sensor], update_before_add=True)
-
-    update_interval_hours = entry.data.get(
-        "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
-    )
-    # The callbacks close over the sensors, so an unregistered timer keeps them
-    # alive and polling; every reload would stack another one.
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass, sensor.async_update_callback, timedelta(hours=update_interval_hours)
-        )
-    )
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            balance_sensor.async_update_callback,
-            timedelta(hours=update_interval_hours),
-        )
-    )
+    coordinator = entry.runtime_data
+    sensor = ThamesWaterSensor(coordinator, name, unique_id)
+    balance_sensor = ThamesWaterBalanceSensor(coordinator)
+    async_add_entities([sensor, balance_sensor])
 
     # Tariff sensors. These scrape a public, region-wide page and need no
     # credentials, so they run on their own coordinator. A failure here must not
@@ -152,7 +120,7 @@ def _generate_hourly_statistics_from_meter_usage(
     ]
 
 
-class ThamesWaterSensor(SensorEntity):
+class ThamesWaterSensor(CoordinatorEntity["ThamesWaterCoordinator"], SensorEntity):
     """Thames Water Sensor class."""
 
     _attr_device_class = SensorDeviceClass.WATER
@@ -161,27 +129,14 @@ class ThamesWaterSensor(SensorEntity):
 
     def __init__(
         self,
-        hass: HomeAssistant,
+        coordinator: ThamesWaterCoordinator,
         name: str,
-        username: str,
-        password: str,
-        account_number: str,
-        meter_id: str,
         unique_id: str,
     ) -> None:
         """Initialize the sensor."""
-        self._hass = hass
+        super().__init__(coordinator)
         self._name = name
-        self._state: float | None = None
-
-        self._username = username
-        self._password = password
-        self._account_number = account_number
-        self._meter_id = meter_id
-
         self._unique_id = unique_id
-        self._attr_should_poll = False
-        self._latest_reading_time: datetime | None = None
 
     @property
     def unique_id(self) -> str:
@@ -204,7 +159,7 @@ class ThamesWaterSensor(SensorEntity):
         is injected as external statistics (visible in the Energy dashboard
         and in Developer tools > Statistics), not in this entity's history.
         """
-        return self._state
+        return self.coordinator.latest_read
 
     @property
     def unit_of_measurement(self) -> str:
@@ -219,10 +174,9 @@ class ThamesWaterSensor(SensorEntity):
         itself comes from a reading taken ~3 days earlier. Exposing the
         reading's real timestamp makes that lag visible.
         """
+        latest = self.coordinator.latest_reading_time
         return {
-            "last_reading_time": self._latest_reading_time.isoformat()
-            if self._latest_reading_time is not None
-            else None,
+            "last_reading_time": latest.isoformat() if latest is not None else None,
         }
 
     @property
@@ -235,27 +189,43 @@ class ThamesWaterSensor(SensorEntity):
             name="Thames Water Meter",
         )
 
-    @callback
-    async def async_update_callback(self, ts) -> None:
-        """Callback triggered by time change to update the sensor and inject statistics."""
-        await self.async_update()
-        self.async_write_ha_state()
 
-    def _fetch_meter_usage(
+class ThamesWaterCoordinator(DataUpdateCoordinator[Account]):
+    """One sign-in per refresh, shared by the consumption and balance sensors."""
+
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+        """Initialize the coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            config_entry=config_entry,
+            name="Thames Water",
+            update_interval=timedelta(
+                hours=config_entry.data.get(
+                    "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
+                )
+            ),
+        )
+        self.latest_read: float | None = None
+        self.latest_reading_time: datetime | None = None
+
+    def _fetch(
         self,
         start: date,
         end: date,
         granularity: Literal["H", "D", "M"] = "H",
-    ) -> MeterUsage:
-        """Fetch meter usage from Thames Water API (blocking, run in executor)."""
+    ) -> tuple[MeterUsage, Account]:
+        """Fetch meter usage and account details on one sign-in (blocking, run in executor)."""
+        data = self.config_entry.data
         thames_water = ThamesWater(
-            email=self._username,
-            password=self._password,
-            account_number=int(self._account_number),
+            email=data["username"],
+            password=data["password"],
+            account_number=int(data["account_number"]),
         )
-        return thames_water.get_meter_usage(
-            self._meter_id, start, end, granularity=granularity
+        usage = thames_water.get_meter_usage(
+            data["meter_id"], start, end, granularity=granularity
         )
+        return usage, thames_water.get_account()
 
     def _inject_statistics(
         self,
@@ -281,7 +251,7 @@ class ThamesWaterSensor(SensorEntity):
             unit_class=VolumeConverter.UNIT_CLASS,
             unit_of_measurement=UnitOfVolume.LITERS,
         )
-        async_add_external_statistics(self._hass, metadata, stats)
+        async_add_external_statistics(self.hass, metadata, stats)
 
     async def _async_start_day(self) -> date:
         """Return the day to resume fetching from.
@@ -290,8 +260,8 @@ class ThamesWaterSensor(SensorEntity):
         insurance against a day that was only partly published, or a short
         look-back on first setup.
         """
-        last = await get_instance(self._hass).async_add_executor_job(
-            get_last_statistics, self._hass, 1, CONSUMPTION_STATISTIC_ID, False, set()
+        last = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, CONSUMPTION_STATISTIC_ID, False, set()
         )
         rows = last.get(CONSUMPTION_STATISTIC_ID)
         if not rows:
@@ -299,28 +269,27 @@ class ThamesWaterSensor(SensorEntity):
         newest = dt_util.utc_from_timestamp(rows[0]["start"])
         return newest.astimezone(LONDON_TZ).date()
 
-    async def async_update(self):
+    async def _async_update_data(self) -> Account:
         """Fetch data, build statistics, and inject external statistics."""
         start = await self._async_start_day()
         end = datetime.now(LONDON_TZ).date()
 
         try:
-            hourly_usage = await self._hass.async_add_executor_job(
-                self._fetch_meter_usage, start, end, "H"
+            hourly_usage, account = await self.hass.async_add_executor_job(
+                self._fetch, start, end, "H"
             )
-        except Exception:
-            _LOGGER.exception("Failed to fetch hourly meter usage from Thames Water")
-            hourly_usage = None
+        except Exception as err:
+            raise UpdateFailed(f"Fetching from Thames Water failed: {err}") from err
 
         # Hourly statistics
-        if hourly_usage is not None and len(hourly_usage.Lines) > 0:
+        if len(hourly_usage.Lines) > 0:
             _LOGGER.info("Fetched %d hourly entries", len(hourly_usage.Lines))
             hourly_stats = _generate_hourly_statistics_from_meter_usage(
                 start, hourly_usage
             )
-            self._state = hourly_usage.Lines[-1].Read
+            self.latest_read = hourly_usage.Lines[-1].Read
             if hourly_stats:
-                self._latest_reading_time = hourly_stats[-1]["start"]
+                self.latest_reading_time = hourly_stats[-1]["start"]
             self._inject_statistics(
                 f"{DOMAIN}:thameswater_consumption_hourly",
                 "Thames Water Consumption (Hourly)",
@@ -341,8 +310,10 @@ class ThamesWaterSensor(SensorEntity):
                 hourly_stats,
             )
 
+        return account
 
-class ThamesWaterBalanceSensor(SensorEntity):
+
+class ThamesWaterBalanceSensor(CoordinatorEntity[ThamesWaterCoordinator], SensorEntity):
     """Sensor exposing the outstanding balance on the Thames Water account."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -351,22 +322,16 @@ class ThamesWaterBalanceSensor(SensorEntity):
     _attr_should_poll = False
     _attr_name = "Thames Water Outstanding Balance"
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        username: str,
-        password: str,
-        account_number: str,
-    ) -> None:
+    def __init__(self, coordinator: ThamesWaterCoordinator) -> None:
         """Initialize the balance sensor."""
-        self._hass = hass
-        self._username = username
-        self._password = password
-        self._account_number = account_number
+        super().__init__(coordinator)
+        account_number = coordinator.config_entry.data["account_number"]
         self._attr_unique_id = f"thames_water_balance_{account_number}"
-        self._attr_native_value: float | None = None
-        self._current_balance: float | None = None
-        self._is_in_credit: bool | None = None
+
+    @property
+    def native_value(self) -> float:
+        """Return the amount currently due."""
+        return float(self.coordinator.data.paymentDueAmount)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -381,40 +346,11 @@ class ThamesWaterBalanceSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, float | bool | None]:
         """Expose the broader balance picture as attributes."""
+        account = self.coordinator.data
         return {
-            "current_balance": self._current_balance,
-            "is_in_credit": self._is_in_credit,
+            "current_balance": float(account.currentBalance),
+            "is_in_credit": account.isInCredit,
         }
-
-    @callback
-    async def async_update_callback(self, ts) -> None:
-        """Triggered by the time interval to refresh and write state."""
-        await self.async_update()
-        self.async_write_ha_state()
-
-    def _fetch_account(self) -> Account:
-        """Fetch account details (blocking; run in executor)."""
-        thames_water = ThamesWater(
-            email=self._username,
-            password=self._password,
-            account_number=int(self._account_number),
-        )
-        return thames_water.get_account()
-
-    async def async_update(self) -> None:
-        """Fetch account details and update the sensor state."""
-        try:
-            account = await self._hass.async_add_executor_job(self._fetch_account)
-        except Exception:
-            _LOGGER.exception("Failed to fetch account details from Thames Water")
-            self._attr_native_value = None
-            self._current_balance = None
-            self._is_in_credit = None
-            return
-
-        self._attr_native_value = float(account.paymentDueAmount)
-        self._current_balance = float(account.currentBalance)
-        self._is_in_credit = account.isInCredit
 
 
 class ThamesWaterTariffCoordinator(DataUpdateCoordinator[Tariff]):

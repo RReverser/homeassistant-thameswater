@@ -63,6 +63,7 @@ Then, add the integration:
 The water statistics can be integrated into HA [Home Energy Management](https://www.home-assistant.io/docs/energy/) using **thames_water:thameswater_consumption**.
 
 It will attempt to fetch the latest data at 00:00 and 12:00 every day.
+The consumption and balance sensors refresh together using a single Thames Water sign-in, and show as unavailable while Thames Water cannot be reached.
 
 Each refresh resumes from the last stored reading, so late or missed days get filled in. On first setup it starts six days back, which given the delay above yields about three days of readings.
 
