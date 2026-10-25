@@ -64,6 +64,20 @@ The water statistics can be integrated into HA [Home Energy Management](https://
 
 It will attempt to fetch the latest data at 00:00 and 12:00 every day.
 
+### Importing older history
+
+To fill the statistics with readings from before the integration was set up, run the **Import history** action on the consumption sensor with a start date:
+
+```yaml
+action: thames_water.import_history
+target:
+  entity_id: sensor.thames_water_sensor
+data:
+  start_date: "2026-02-01"
+```
+
+The whole range is one request, whatever its width, and re-running it is safe. Pick your move-in date rather than the earliest date with data: readings exist from before you moved in, so an earlier start imports the previous occupant's usage.
+
 [![Open your Home Assistant instance and show your Energy configuration panel.](https://my.home-assistant.io/badges/config_energy.svg)](https://my.home-assistant.io/redirect/config_energy/)
 
 ![Dashboard](./dashboard.png)

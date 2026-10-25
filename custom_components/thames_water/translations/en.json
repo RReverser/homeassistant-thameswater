@@ -18,5 +18,17 @@
       "cannot_connect": "Could not reach Thames Water while loading the account. Check the Home Assistant log for details.",
       "not_smart_metered": "This login has no smart-metered account, so there are no readings to fetch."
     }
+  },
+  "services": {
+    "import_history": {
+      "name": "Import history",
+      "description": "Fetches older readings and writes them into the consumption statistics. Re-running it is safe: a reading already written is overwritten with the same value.",
+      "fields": {
+        "start_date": {
+          "name": "Start date",
+          "description": "The first day to import. Readings exist from before you moved in, so a start earlier than your move-in date imports the previous occupant's usage."
+        }
+      }
+    }
   }
 }

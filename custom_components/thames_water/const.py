@@ -1,2 +1,4 @@
 DOMAIN = "thames_water"
 DEFAULT_UPDATE_INTERVAL_HOURS = 6
+SERVICE_IMPORT_HISTORY = "import_history"
+ATTR_START_DATE = "start_date"

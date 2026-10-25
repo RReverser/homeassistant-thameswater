@@ -18,6 +18,7 @@ from thameswaterapi import (
     get_tariff,
     meter_usage_lines_to_timeseries,
 )
+import voluptuous as vol
 
 from homeassistant.components.recorder.models import (
     StatisticData,
@@ -35,6 +36,9 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import (
@@ -44,7 +48,12 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util.unit_conversion import VolumeConverter
 
-from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
+from .const import (
+    ATTR_START_DATE,
+    DEFAULT_UPDATE_INTERVAL_HOURS,
+    DOMAIN,
+    SERVICE_IMPORT_HISTORY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 SELENIUM_TIMEOUT = 60
@@ -89,6 +98,13 @@ async def async_setup_entry(
         account_number,
     )
     async_add_entities([sensor, balance_sensor], update_before_add=True)
+
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        SERVICE_IMPORT_HISTORY,
+        {vol.Required(ATTR_START_DATE): cv.date},
+        "async_import_history",
+    )
 
     update_interval_hours = entry.data.get(
         "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
@@ -269,6 +285,42 @@ class ThamesWaterSensor(SensorEntity):
             unit_of_measurement=UnitOfVolume.LITERS,
         )
         async_add_external_statistics(self._hass, metadata, stats)
+
+    async def async_import_history(self, start_date: date) -> None:
+        """Import readings from a start date up to today into the statistics.
+
+        Rows carry the meter's own cumulative total, so re-running this over
+        days that are already recorded overwrites them with the same values.
+        """
+        today = datetime.now(ZoneInfo("Europe/London")).date()
+        if start_date > today:
+            raise HomeAssistantError(f"{start_date} is in the future")
+
+        start_dt = datetime.combine(start_date, datetime.min.time())
+        end_dt = datetime.combine(today, datetime.min.time())
+        try:
+            usage = await self._hass.async_add_executor_job(
+                self._fetch_meter_usage, start_dt, end_dt, "H"
+            )
+        except Exception as err:
+            raise HomeAssistantError(
+                f"Fetching history from Thames Water failed: {err}"
+            ) from err
+
+        stats = _generate_hourly_statistics_from_meter_usage(start_date, usage)
+        if not stats:
+            raise HomeAssistantError(
+                f"Thames Water has no readings from {start_date} onwards"
+            )
+
+        self._inject_statistics(
+            f"{DOMAIN}:thameswater_consumption_hourly",
+            "Thames Water Consumption (Hourly)",
+            stats,
+        )
+        self._inject_statistics(
+            f"{DOMAIN}:thameswater_consumption", "Thames Water Consumption", stats
+        )
 
     async def async_update(self):
         """Fetch data, build statistics, and inject external statistics."""

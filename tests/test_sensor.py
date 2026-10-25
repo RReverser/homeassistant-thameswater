@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from unittest.mock import patch
+from datetime import date, datetime, timedelta
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
+import pytest
+import voluptuous as vol
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from thameswaterapi import Line, MeterUsage
 
+from custom_components.thames_water.const import DOMAIN
 from custom_components.thames_water.sensor import (
     ThamesWaterSensor,
     _generate_hourly_statistics_from_meter_usage,
     _still_in_force,
+    async_setup_entry,
 )
 
 LONDON_TZ = ZoneInfo("Europe/London")
@@ -198,3 +205,89 @@ class TestUpdate:
                 tzinfo=LONDON_TZ,
             ).isoformat(),
         }
+
+
+class TestImportHistory:
+    async def test_writes_both_statistics_from_the_start_date(self) -> None:
+        sensor = _make_sensor()
+        captured: dict[str, datetime] = {}
+
+        def fake_fetch(start_dt, end_dt, granularity="H"):
+            captured["start"], captured["end"] = start_dt, end_dt
+            return _make_meter_usage(
+                [_make_line(1.0, 100.0, "0:00"), _make_line(2.0, 102.0, "1:00")]
+            )
+
+        with (
+            patch.object(sensor, "_fetch_meter_usage", side_effect=fake_fetch),
+            patch.object(sensor, "_inject_statistics") as inject,
+        ):
+            await sensor.async_import_history(date(2026, 2, 1))
+
+        assert captured["start"].date() == date(2026, 2, 1)
+        assert [call.args[0] for call in inject.call_args_list] == [
+            "thames_water:thameswater_consumption_hourly",
+            "thames_water:thameswater_consumption",
+        ]
+        stats = inject.call_args_list[0].args[2]
+        assert [row["start"] for row in stats] == [
+            datetime(2026, 2, 1, 0, tzinfo=LONDON_TZ),
+            datetime(2026, 2, 1, 1, tzinfo=LONDON_TZ),
+        ]
+        assert [row["sum"] for row in stats] == [100.0, 102.0]
+
+    async def test_a_range_without_readings_is_reported(self) -> None:
+        sensor = _make_sensor()
+        with (
+            patch.object(
+                sensor, "_fetch_meter_usage", return_value=_make_meter_usage([])
+            ),
+            patch.object(sensor, "_inject_statistics") as inject,
+            pytest.raises(HomeAssistantError, match="no readings"),
+        ):
+            await sensor.async_import_history(date(2026, 2, 1))
+        inject.assert_not_called()
+
+    async def test_a_start_date_in_the_future_is_rejected(self) -> None:
+        sensor = _make_sensor()
+        with pytest.raises(HomeAssistantError, match="future"):
+            await sensor.async_import_history(date.today() + timedelta(days=2))
+
+    async def test_a_failed_fetch_is_reported(self) -> None:
+        sensor = _make_sensor()
+        with (
+            patch.object(sensor, "_fetch_meter_usage", side_effect=OSError("down")),
+            pytest.raises(HomeAssistantError, match="down"),
+        ):
+            await sensor.async_import_history(date(2026, 2, 1))
+
+
+async def test_setup_registers_the_import_history_action(hass: HomeAssistant) -> None:
+    """The action is offered on the consumption sensor, with a date field."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"username": "u", "password": "p", "account_number": "1", "meter_id": "m"},
+    )
+    entry.add_to_hass(hass)
+    platform = MagicMock()
+
+    with (
+        patch(
+            "custom_components.thames_water.sensor.entity_platform."
+            "async_get_current_platform",
+            return_value=platform,
+        ),
+        patch(
+            "custom_components.thames_water.sensor.ThamesWaterTariffCoordinator."
+            "async_refresh"
+        ),
+        patch("custom_components.thames_water.sensor.async_track_time_interval"),
+    ):
+        await async_setup_entry(hass, entry, MagicMock())
+
+    name, fields, method = platform.async_register_entity_service.call_args.args
+    schema = vol.Schema(fields)
+    assert (name, method) == ("import_history", "async_import_history")
+    assert schema({"start_date": "2026-02-01"}) == {"start_date": date(2026, 2, 1)}
+    with pytest.raises(vol.Invalid):
+        schema({})
