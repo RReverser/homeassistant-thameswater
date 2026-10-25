@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import logging
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -19,12 +19,16 @@ from thameswaterapi import (
     meter_usage_lines_to_timeseries,
 )
 
+from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
     StatisticData,
     StatisticMeanType,
     StatisticMetaData,
 )
-from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    get_last_statistics,
+)
 from homeassistant.components.sensor import (
     RestoreSensor,
     SensorDeviceClass,
@@ -42,6 +46,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
@@ -51,6 +56,14 @@ SELENIUM_TIMEOUT = 60
 
 # The tariff is a fixed annual published scheme, so once a day is ample.
 TARIFF_SCAN_INTERVAL = timedelta(hours=24)
+
+CONSUMPTION_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption"
+
+# How far back to fetch when there is no statistic yet (first setup). Readings
+# lag by about three days, so this reaches the same days as the old fixed window.
+INITIAL_HISTORY = timedelta(days=6)
+
+LONDON_TZ = ZoneInfo("Europe/London")
 
 
 async def async_setup_entry(
@@ -270,12 +283,25 @@ class ThamesWaterSensor(SensorEntity):
         )
         async_add_external_statistics(self._hass, metadata, stats)
 
+    async def _async_start_day(self) -> date:
+        """Return the day to resume fetching from.
+
+        This is the day of the newest stored statistic, requested again so a
+        partly published day is completed, or a short look-back on first setup.
+        """
+        last = await get_instance(self._hass).async_add_executor_job(
+            get_last_statistics, self._hass, 1, CONSUMPTION_STATISTIC_ID, True, set()
+        )
+        rows = last.get(CONSUMPTION_STATISTIC_ID)
+        if not rows:
+            return datetime.now(LONDON_TZ).date() - INITIAL_HISTORY
+        newest = dt_util.utc_from_timestamp(rows[0]["start"])
+        return newest.astimezone(LONDON_TZ).date()
+
     async def async_update(self):
         """Fetch data, build statistics, and inject external statistics."""
-        end_dt = (datetime.now() - timedelta(days=3)).replace(
-            minute=0, second=0, microsecond=0
-        )
-        start_dt = end_dt - timedelta(days=3)
+        start_dt = datetime.combine(await self._async_start_day(), time.min)
+        end_dt = datetime.now(LONDON_TZ)
 
         try:
             hourly_usage = await self._hass.async_add_executor_job(
@@ -309,7 +335,7 @@ class ThamesWaterSensor(SensorEntity):
 
         if hourly_stats is not None:
             self._inject_statistics(
-                f"{DOMAIN}:thameswater_consumption",
+                CONSUMPTION_STATISTIC_ID,
                 "Thames Water Consumption",
                 hourly_stats,
             )
