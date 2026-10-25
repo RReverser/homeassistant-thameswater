@@ -517,7 +517,7 @@ def _still_in_force(effective_date: date) -> bool:
     1 April after the one they started on.
     """
     lapses = date(effective_date.year + 1, 4, 1)
-    return datetime.now(ZoneInfo("Europe/London")).date() < lapses
+    return datetime.now(LONDON_TZ).date() < lapses
 
 
 class ThamesWaterTariffSensor(

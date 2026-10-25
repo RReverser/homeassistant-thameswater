@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
@@ -147,6 +148,7 @@ def _make_sensor() -> ThamesWaterSensor:
     )
 
 
+@contextmanager
 def _recorder_with_newest(newest: datetime | None):
     """Patch the recorder lookup of the newest stored consumption statistic."""
     rows = (
@@ -160,7 +162,7 @@ def _recorder_with_newest(newest: datetime | None):
         return func(*args)
 
     instance.async_add_executor_job = run
-    return (
+    with (
         patch(
             "custom_components.thames_water.sensor.get_instance", return_value=instance
         ),
@@ -168,14 +170,14 @@ def _recorder_with_newest(newest: datetime | None):
             "custom_components.thames_water.sensor.get_last_statistics",
             return_value=rows,
         ),
-    )
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)
 def no_statistics_yet():
     """By default nothing has been recorded, as on a first setup."""
-    get_instance_patch, last_patch = _recorder_with_newest(None)
-    with get_instance_patch, last_patch:
+    with _recorder_with_newest(None):
         yield
 
 
@@ -244,10 +246,8 @@ class TestResume:
             captured["start"], captured["end"] = start_dt, end_dt
             return _make_meter_usage([_make_line(1.0, 1.0, "0:00")])
 
-        get_instance_patch, last_patch = _recorder_with_newest(newest)
         with (
-            get_instance_patch,
-            last_patch,
+            _recorder_with_newest(newest),
             patch.object(sensor, "_fetch_meter_usage", side_effect=fake_fetch),
             patch.object(sensor, "_inject_statistics"),
         ):
@@ -280,12 +280,8 @@ class TestResume:
         usage = _make_meter_usage(
             [_make_line(1.0, 100.0, "0:00"), _make_line(2.0, 102.0, "1:00")]
         )
-        get_instance_patch, last_patch = _recorder_with_newest(
-            datetime(2026, 10, 20, 5, tzinfo=LONDON_TZ)
-        )
         with (
-            get_instance_patch,
-            last_patch,
+            _recorder_with_newest(datetime(2026, 10, 20, 5, tzinfo=LONDON_TZ)),
             patch.object(sensor, "_fetch_meter_usage", return_value=usage),
             patch.object(sensor, "_inject_statistics") as inject,
         ):
