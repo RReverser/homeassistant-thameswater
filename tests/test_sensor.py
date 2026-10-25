@@ -20,6 +20,7 @@ from custom_components.thames_water.const import DOMAIN
 from custom_components.thames_water.sensor import (
     CONSUMPTION_STATISTIC_ID,
     INITIAL_HISTORY,
+    UPDATE_INTERVAL,
     ThamesWaterBalanceSensor,
     ThamesWaterCoordinator,
     ThamesWaterSensor,
@@ -191,6 +192,25 @@ def no_statistics_yet():
     """By default nothing has been recorded, as on a first setup."""
     with _recorder_with_newest(None):
         yield
+
+
+def test_a_stored_interval_from_an_older_version_is_ignored(
+    hass: HomeAssistant,
+) -> None:
+    """Entries created while the interval was an option keep working unchanged."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "username": "u",
+            "password": "p",
+            "account_number": "1",
+            "meter_id": "m",
+            "update_interval_hours": 1,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert ThamesWaterCoordinator(hass, entry).update_interval == UPDATE_INTERVAL
 
 
 class TestUpdate:

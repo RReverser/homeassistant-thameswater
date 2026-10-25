@@ -48,10 +48,14 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import VolumeConverter
 
-from .const import DEFAULT_UPDATE_INTERVAL_HOURS, DOMAIN
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 SELENIUM_TIMEOUT = 60
+
+# Thames Water publishes in daily batches, so twice a day is ample. Anyone who
+# wants to stop polling can use the entry's "Enable polling for updates" option.
+UPDATE_INTERVAL = timedelta(hours=12)
 
 # The tariff is a fixed annual published scheme, so once a day is ample.
 TARIFF_SCAN_INTERVAL = timedelta(hours=24)
@@ -200,11 +204,7 @@ class ThamesWaterCoordinator(DataUpdateCoordinator[Account]):
             _LOGGER,
             config_entry=config_entry,
             name="Thames Water",
-            update_interval=timedelta(
-                hours=config_entry.data.get(
-                    "update_interval_hours", DEFAULT_UPDATE_INTERVAL_HOURS
-                )
-            ),
+            update_interval=UPDATE_INTERVAL,
         )
         self.latest_read: float | None = None
         self.latest_reading_time: datetime | None = None
