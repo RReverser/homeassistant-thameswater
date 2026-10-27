@@ -254,12 +254,12 @@ class TestResume:
             await sensor.async_update()
         return captured
 
-    async def test_starts_on_the_day_of_the_newest_statistic_and_ends_today(
+    async def test_starts_on_the_day_after_the_newest_statistic_and_ends_today(
         self,
     ) -> None:
         window = await self._fetch_window(datetime(2026, 10, 20, 13, tzinfo=LONDON_TZ))
 
-        assert window["start"] == date(2026, 10, 20)
+        assert window["start"] == date(2026, 10, 21)
         assert window["end"] == datetime.now(LONDON_TZ).date()
 
     async def test_a_statistic_just_after_local_midnight_is_that_london_day(
@@ -268,7 +268,7 @@ class TestResume:
         """00:00 BST is the previous day in UTC but the same day in London."""
         window = await self._fetch_window(datetime(2026, 7, 2, 0, tzinfo=LONDON_TZ))
 
-        assert window["start"] == date(2026, 7, 2)
+        assert window["start"] == date(2026, 7, 3)
 
     async def test_first_setup_looks_back_a_fixed_period(self) -> None:
         window = await self._fetch_window(None)
@@ -289,6 +289,6 @@ class TestResume:
 
         stats = inject.call_args_list[0].args[2]
         assert [row["start"] for row in stats] == [
-            datetime(2026, 10, 20, 0, tzinfo=LONDON_TZ),
-            datetime(2026, 10, 20, 1, tzinfo=LONDON_TZ),
+            datetime(2026, 10, 21, 0, tzinfo=LONDON_TZ),
+            datetime(2026, 10, 21, 1, tzinfo=LONDON_TZ),
         ]

@@ -286,9 +286,8 @@ class ThamesWaterSensor(SensorEntity):
     async def _async_start_day(self) -> date:
         """Return the day to resume fetching from.
 
-        This is the day of the newest stored statistic, requested again as cheap
-        insurance against a day that was only partly published, or a short
-        look-back on first setup.
+        Thames Water publishes whole days, so this is the day after the newest
+        stored statistic, or a short look-back on first setup.
         """
         last = await get_instance(self._hass).async_add_executor_job(
             get_last_statistics, self._hass, 1, CONSUMPTION_STATISTIC_ID, False, set()
@@ -297,7 +296,7 @@ class ThamesWaterSensor(SensorEntity):
         if not rows:
             return datetime.now(LONDON_TZ).date() - INITIAL_HISTORY
         newest = dt_util.utc_from_timestamp(rows[0]["start"])
-        return newest.astimezone(LONDON_TZ).date()
+        return newest.astimezone(LONDON_TZ).date() + timedelta(days=1)
 
     async def async_update(self):
         """Fetch data, build statistics, and inject external statistics."""
@@ -319,22 +318,12 @@ class ThamesWaterSensor(SensorEntity):
                 start, hourly_usage
             )
             self._state = hourly_usage.Lines[-1].Read
-            if hourly_stats:
-                self._latest_reading_time = hourly_stats[-1]["start"]
+            self._latest_reading_time = hourly_stats[-1]["start"]
             self._inject_statistics(
                 f"{DOMAIN}:thameswater_consumption_hourly",
                 "Thames Water Consumption (Hourly)",
                 hourly_stats,
             )
-        else:
-            hourly_stats = None
-            _LOGGER.warning(
-                "Thames Water returned no hourly data for %s to %s",
-                start,
-                end,
-            )
-
-        if hourly_stats is not None:
             self._inject_statistics(
                 CONSUMPTION_STATISTIC_ID,
                 "Thames Water Consumption",
