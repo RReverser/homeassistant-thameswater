@@ -187,7 +187,7 @@ class TestUpdate:
         sensor = _make_sensor()
         calls: list[str] = []
 
-        def fake_fetch(start_dt, end_dt, granularity="H"):
+        def fake_fetch(start, end, granularity="H"):
             calls.append(granularity)
             return _make_meter_usage([_make_line(1.0, 1.0, "0:00")])
 
@@ -208,8 +208,8 @@ class TestUpdate:
         sensor = _make_sensor()
         captured: dict[str, date] = {}
 
-        def fake_fetch(start_dt, end_dt, granularity="H"):
-            captured["start"] = start_dt
+        def fake_fetch(start, end, granularity="H"):
+            captured["start"] = start
             return _make_meter_usage(
                 [
                     _make_line(1.0, 100.0, "0:00"),
@@ -242,8 +242,8 @@ class TestResume:
         sensor = _make_sensor()
         captured: dict[str, date] = {}
 
-        def fake_fetch(start_dt, end_dt, granularity="H"):
-            captured["start"], captured["end"] = start_dt, end_dt
+        def fake_fetch(start, end, granularity="H"):
+            captured["start"], captured["end"] = start, end
             return _make_meter_usage([_make_line(1.0, 1.0, "0:00")])
 
         with (

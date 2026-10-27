@@ -59,8 +59,8 @@ TARIFF_SCAN_INTERVAL = timedelta(hours=24)
 
 CONSUMPTION_STATISTIC_ID = f"{DOMAIN}:thameswater_consumption"
 
-# How far back to fetch when there is no statistic yet (first setup). Readings
-# lag by about three days, so this reaches the same days as the old fixed window.
+# How far back to fetch on first setup, when there is no statistic to resume
+# from. Readings lag by about three days.
 INITIAL_HISTORY = timedelta(days=6)
 
 LONDON_TZ = ZoneInfo("Europe/London")
@@ -286,11 +286,12 @@ class ThamesWaterSensor(SensorEntity):
     async def _async_start_day(self) -> date:
         """Return the day to resume fetching from.
 
-        This is the day of the newest stored statistic, requested again so a
-        partly published day is completed, or a short look-back on first setup.
+        This is the day of the newest stored statistic, requested again as cheap
+        insurance against a day that was only partly published, or a short
+        look-back on first setup.
         """
         last = await get_instance(self._hass).async_add_executor_job(
-            get_last_statistics, self._hass, 1, CONSUMPTION_STATISTIC_ID, True, set()
+            get_last_statistics, self._hass, 1, CONSUMPTION_STATISTIC_ID, False, set()
         )
         rows = last.get(CONSUMPTION_STATISTIC_ID)
         if not rows:
